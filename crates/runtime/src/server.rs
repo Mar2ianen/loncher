@@ -48,6 +48,19 @@ pub async fn run_daemon_with_ui_and_applications<U>(
 where
     U: UiBackend + 'static,
 {
+    run_daemon_with_ui_and_applications_ready(config, cancellation, ui, applications, None).await
+}
+
+pub async fn run_daemon_with_ui_and_applications_ready<U>(
+    config: RuntimeConfig,
+    cancellation: CancellationToken,
+    ui: U,
+    applications: Vec<ApplicationEntry>,
+    ready: Option<oneshot::Sender<()>>,
+) -> Result<(), ServerError>
+where
+    U: UiBackend + 'static,
+{
     let bound = bind_listener(&config).await?;
     let expected_uid = bound.owner_uid;
     let listener = bound.listener;
@@ -55,6 +68,9 @@ where
     let (request_tx, request_rx) = mpsc::channel(config.command_queue_capacity);
 
     info!(socket = %config.socket_path.display(), "daemon IPC listener ready");
+    if let Some(ready) = ready {
+        let _ = ready.send(());
+    }
 
     let listener_cancellation = cancellation.child_token();
     let listener_config = config.clone();

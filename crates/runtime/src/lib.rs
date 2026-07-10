@@ -7,12 +7,17 @@ mod transport;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub use config::{ConfigError, RuntimeConfig};
-pub use server::{ServerError, run_daemon_with_ui, run_daemon_with_ui_and_applications};
+pub use server::{
+    ServerError, run_daemon_with_ui, run_daemon_with_ui_and_applications,
+    run_daemon_with_ui_and_applications_ready,
+};
 
 use loncher_applications::discover;
 use loncher_domain::{
     DaemonCommand, DaemonReply, ProtocolErrorCode, ReplyPayload, RequestEnvelope, RequestId,
 };
+#[cfg(feature = "gui")]
+use loncher_ui_contract::UiBackend;
 use loncher_ui_contract::UnavailableUiBackend;
 use thiserror::Error;
 use tokio::{net::UnixStream, time::timeout};
@@ -51,14 +56,40 @@ pub async fn run_daemon_gui(cancellation: CancellationToken) -> Result<(), Runti
         .await
         .map_err(|error| RuntimeError::Discovery(error.to_string()))?;
     let channels = loncher_ui_iced::channels();
-    let backend = channels.backend.clone();
-    let gui_task = tokio::task::spawn_blocking(move || loncher_ui_iced::run(channels));
-    let daemon_result =
-        run_daemon_with_ui_and_applications(config, cancellation, backend, report.applications)
-            .await;
-    let gui_result = gui_task.await.map_err(|error| RuntimeError::GuiTask(error.to_string()))?;
-    gui_result.map_err(|error| RuntimeError::Gui(error.to_string()))?;
-    daemon_result?;
+    let mut backend = channels.backend.clone();
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let daemon_cancellation = cancellation.clone();
+    let mut daemon_task = tokio::spawn(run_daemon_with_ui_and_applications_ready(
+        config,
+        daemon_cancellation,
+        backend.clone(),
+        report.applications,
+        Some(ready_tx),
+    ));
+
+    if ready_rx.await.is_err() {
+        return Ok(daemon_task
+            .await
+            .map_err(|error| RuntimeError::Server(ServerError::ListenerTask(error)))??);
+    }
+
+    let mut gui_task = tokio::task::spawn_blocking(move || loncher_ui_iced::run(channels));
+    tokio::select! {
+        daemon = &mut daemon_task => {
+            backend.dispatch(loncher_ui_contract::UiCommand::Shutdown)
+                .map_err(|error| RuntimeError::Gui(error.to_string()))?;
+            let gui = gui_task.await.map_err(|error| RuntimeError::GuiTask(error.to_string()))?;
+            gui.map_err(|error| RuntimeError::Gui(error.to_string()))?;
+            daemon.map_err(|error| RuntimeError::Server(ServerError::ListenerTask(error)))??;
+        }
+        gui = &mut gui_task => {
+            cancellation.cancel();
+            let gui = gui.map_err(|error| RuntimeError::GuiTask(error.to_string()))?;
+            gui.map_err(|error| RuntimeError::Gui(error.to_string()))?;
+            daemon_task.await
+                .map_err(|error| RuntimeError::Server(ServerError::ListenerTask(error)))??;
+        }
+    }
     Ok(())
 }
 

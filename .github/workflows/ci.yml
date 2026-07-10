@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  rust:
+  quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,3 +22,26 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Tests
         run: cargo test --workspace --all-features
+
+  feature-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: core-headless
+            args: --no-default-features
+          - name: sync-client
+            args: --no-default-features --features sync-client
+          - name: sync-server
+            args: --no-default-features --features sync-server
+          - name: desktop
+            args: --no-default-features --features desktop
+          - name: full
+            args: --all-features
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check ${{ matrix.name }}
+        run: cargo check -p loncher ${{ matrix.args }}

@@ -1,6 +1,5 @@
 use std::{
-    fs,
-    io,
+    fs, io,
     os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
 };
@@ -20,7 +19,7 @@ use tokio::{
     time::timeout,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn, Instrument};
+use tracing::{Instrument, debug, error, info, warn};
 
 use crate::{config::RuntimeConfig, transport};
 
@@ -45,14 +44,8 @@ where
     let listener_cancellation = cancellation.child_token();
     let listener_config = config.clone();
     let listener_task = tokio::spawn(async move {
-        run_listener(
-            listener,
-            listener_config,
-            expected_uid,
-            request_tx,
-            listener_cancellation,
-        )
-        .await
+        run_listener(listener, listener_config, expected_uid, request_tx, listener_cancellation)
+            .await
     });
 
     let router_result = run_router(ui, request_rx, cancellation.clone()).await;
@@ -87,10 +80,7 @@ async fn bind_listener(config: &RuntimeConfig) -> Result<BoundListener, ServerEr
 
     fs::set_permissions(&config.socket_path, fs::Permissions::from_mode(0o600))?;
 
-    Ok(BoundListener {
-        listener,
-        owner_uid,
-    })
+    Ok(BoundListener { listener, owner_uid })
 }
 
 fn prepare_parent_directory(parent: &Path) -> Result<(), ServerError> {
@@ -249,10 +239,7 @@ async fn handle_connection(
 
         let (reply_tx, reply_rx) = oneshot::channel();
         request_tx
-            .send(RoutedRequest {
-                envelope,
-                respond_to: reply_tx,
-            })
+            .send(RoutedRequest { envelope, respond_to: reply_tx })
             .await
             .map_err(|_| ConnectionError::RouterUnavailable)?;
 
@@ -319,18 +306,14 @@ where
     if let DaemonCommand::Status = command {
         return ReplyEnvelope::success(
             request_id,
-            DaemonReply::Status {
-                snapshot: state.snapshot(),
-            },
+            DaemonReply::Status { snapshot: state.snapshot() },
         );
     }
 
     if let DaemonCommand::Shutdown = command {
         return ReplyEnvelope::success(
             request_id,
-            DaemonReply::Accepted {
-                snapshot: state.snapshot(),
-            },
+            DaemonReply::Accepted { snapshot: state.snapshot() },
         );
     }
 
@@ -345,19 +328,15 @@ where
     };
 
     if next.snapshot() != state.snapshot() {
-        if let Err(error) = ui.dispatch(UiCommand::ApplySnapshot(to_ui_snapshot(&next.snapshot()))) {
+        if let Err(error) = ui.dispatch(UiCommand::ApplySnapshot(to_ui_snapshot(&next.snapshot())))
+        {
             let (code, message) = public_ui_error(error);
             return ReplyEnvelope::error(request_id, ProtocolError::new(code, message));
         }
         *state = next;
     }
 
-    ReplyEnvelope::success(
-        request_id,
-        DaemonReply::Accepted {
-            snapshot: state.snapshot(),
-        },
-    )
+    ReplyEnvelope::success(request_id, DaemonReply::Accepted { snapshot: state.snapshot() })
 }
 
 fn to_ui_snapshot(snapshot: &loncher_domain::DaemonSnapshot) -> UiSnapshot {
@@ -384,10 +363,7 @@ fn public_ui_error(error: UiError) -> (ProtocolErrorCode, String) {
         ),
         UiError::Rejected(reason) => {
             error!(reason, "UI backend rejected a daemon snapshot");
-            (
-                ProtocolErrorCode::Internal,
-                "UI backend rejected the requested state".to_owned(),
-            )
+            (ProtocolErrorCode::Internal, "UI backend rejected the requested state".to_owned())
         }
     }
 }
@@ -407,7 +383,9 @@ impl Drop for SocketCleanup {
         match fs::remove_file(&self.path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => warn!(path = %self.path.display(), %error, "failed to remove daemon socket"),
+            Err(error) => {
+                warn!(path = %self.path.display(), %error, "failed to remove daemon socket")
+            }
         }
     }
 }

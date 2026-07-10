@@ -9,7 +9,7 @@ use std::{
 
 use iced::{
     Element, Event, Length, Subscription, Task, Theme, event, keyboard, stream,
-    widget::{column, container, text, text_input},
+    widget::{column, container, image, row, text, text_input},
     window,
 };
 use iced_layershell::{
@@ -168,7 +168,19 @@ fn view(state: &FrontendState) -> Element<'_, Message, Theme, iced::Renderer> {
         |column, (index, result)| {
             let marker = if index == state.snapshot.selected { "▸ " } else { "  " };
             let generic = result.generic_name.as_deref().unwrap_or("");
-            column.push(text(format!("{marker}{}  {generic}", result.name)).size(18))
+            let icon = result
+                .icon_path
+                .as_ref()
+                .map(|path| {
+                    image(image::Handle::from_path(path))
+                        .width(Length::Fixed(24.0))
+                        .height(Length::Fixed(24.0))
+                })
+                .map(iced::Element::from)
+                .unwrap_or_else(|| container(text("□")).width(Length::Fixed(24.0)).into());
+            column.push(
+                row![icon, text(format!("{marker}{}  {generic}", result.name)).size(18)].spacing(8),
+            )
         },
     );
     container(results.padding(24)).width(Length::Fill).into()

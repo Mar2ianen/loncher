@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use std::path::PathBuf;
+
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -23,6 +25,16 @@ pub struct UiSnapshot {
     pub mode: UiMode,
     pub query: Option<String>,
     pub generation: u64,
+    pub results: Vec<ApplicationViewModel>,
+    pub selected: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ApplicationViewModel {
+    pub desktop_id: String,
+    pub name: String,
+    pub generic_name: Option<String>,
+    pub icon_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +47,8 @@ pub enum UiCommand {
 pub enum UiEvent {
     DismissRequested,
     QueryChanged(String),
+    MoveSelection { delta: i32 },
+    CompleteSelection,
     SubmitRequested,
 }
 
@@ -89,6 +103,8 @@ mod tests {
             mode: UiMode::Launcher,
             query: None,
             generation: 1,
+            results: Vec::new(),
+            selected: 0,
         }));
 
         assert!(matches!(result, Err(UiError::UnavailableInBuild)));

@@ -389,6 +389,8 @@ fn to_ui_snapshot(snapshot: &loncher_domain::DaemonSnapshot) -> UiSnapshot {
         },
         query: snapshot.query.clone(),
         generation: snapshot.generation,
+        results: Vec::new(),
+        selected: 0,
     }
 }
 

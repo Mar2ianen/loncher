@@ -4,10 +4,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use loncher_applications::ApplicationEntry;
 use loncher_domain::{
     DAEMON_PROTOCOL_VERSION, DaemonCommand, DaemonReply, DaemonState, LauncherMode, ProtocolError,
     ProtocolErrorCode, ReplyEnvelope, RequestEnvelope, RequestId, UiVisibility,
 };
+use loncher_search::{SearchRequest, SearchService};
 use loncher_ui_contract::{
     UiBackend, UiCommand, UiError, UiMode, UiSnapshot, UiVisibility as ContractVisibility,
 };
@@ -33,6 +35,18 @@ pub async fn run_daemon_with_ui<U>(
 where
     U: UiBackend + 'static,
 {
+    run_daemon_with_ui_and_applications(config, cancellation, ui, Vec::new()).await
+}
+
+pub async fn run_daemon_with_ui_and_applications<U>(
+    config: RuntimeConfig,
+    cancellation: CancellationToken,
+    ui: U,
+    applications: Vec<ApplicationEntry>,
+) -> Result<(), ServerError>
+where
+    U: UiBackend + 'static,
+{
     let bound = bind_listener(&config).await?;
     let expected_uid = bound.owner_uid;
     let listener = bound.listener;
@@ -48,7 +62,7 @@ where
             .await
     });
 
-    let router_result = run_router(ui, request_rx, cancellation.clone()).await;
+    let router_result = run_router(ui, request_rx, cancellation.clone(), applications).await;
     cancellation.cancel();
 
     let listener_result = listener_task.await.map_err(ServerError::ListenerTask)?;
@@ -297,12 +311,14 @@ async fn run_router<U>(
     mut ui: U,
     mut requests: mpsc::Receiver<RoutedRequest>,
     cancellation: CancellationToken,
+    applications: Vec<ApplicationEntry>,
 ) -> Result<(), ServerError>
 where
     U: UiBackend,
 {
     let mut state = DaemonState::default();
-    ui.dispatch(UiCommand::ApplySnapshot(to_ui_snapshot(&state.snapshot())))?;
+    let search = SearchService::new(applications, 12);
+    ui.dispatch(UiCommand::ApplySnapshot(to_ui_snapshot(&state.snapshot(), &search)))?;
 
     loop {
         tokio::select! {
@@ -312,7 +328,7 @@ where
                 let request_id = request.envelope.request_id;
                 let command = request.envelope.command;
                 let shutdown = matches!(command, DaemonCommand::Shutdown);
-                let reply = route_command(&mut state, &mut ui, request_id, &command);
+                let reply = route_command(&mut state, &mut ui, request_id, &command, &search);
 
                 if request.respond_to.send(reply).is_err() {
                     debug!(request_id = request_id.get(), "IPC client dropped before reply");
@@ -336,6 +352,7 @@ fn route_command<U>(
     ui: &mut U,
     request_id: RequestId,
     command: &DaemonCommand,
+    search: &SearchService,
 ) -> ReplyEnvelope
 where
     U: UiBackend,
@@ -365,7 +382,8 @@ where
     };
 
     if next.snapshot() != state.snapshot() {
-        if let Err(error) = ui.dispatch(UiCommand::ApplySnapshot(to_ui_snapshot(&next.snapshot())))
+        if let Err(error) =
+            ui.dispatch(UiCommand::ApplySnapshot(to_ui_snapshot(&next.snapshot(), search)))
         {
             let (code, message) = public_ui_error(error);
             return ReplyEnvelope::error(request_id, ProtocolError::new(code, message));
@@ -376,7 +394,17 @@ where
     ReplyEnvelope::success(request_id, DaemonReply::Accepted { snapshot: state.snapshot() })
 }
 
-fn to_ui_snapshot(snapshot: &loncher_domain::DaemonSnapshot) -> UiSnapshot {
+fn to_ui_snapshot(snapshot: &loncher_domain::DaemonSnapshot, search: &SearchService) -> UiSnapshot {
+    let response = search
+        .search(SearchRequest {
+            generation: snapshot.generation,
+            query: snapshot.query.clone().unwrap_or_default(),
+        })
+        .unwrap_or_else(|_| loncher_search::SearchResponse {
+            generation: snapshot.generation,
+            query: String::new(),
+            results: Vec::new(),
+        });
     UiSnapshot {
         visibility: match snapshot.visibility {
             UiVisibility::Hidden => ContractVisibility::Hidden,
@@ -389,7 +417,16 @@ fn to_ui_snapshot(snapshot: &loncher_domain::DaemonSnapshot) -> UiSnapshot {
         },
         query: snapshot.query.clone(),
         generation: snapshot.generation,
-        results: Vec::new(),
+        results: response
+            .results
+            .into_iter()
+            .map(|result| loncher_ui_contract::ApplicationViewModel {
+                desktop_id: result.application.desktop_id,
+                name: result.application.name,
+                generic_name: result.application.generic_name,
+                icon_path: result.application.icon.and_then(|icon| icon.resolved_path),
+            })
+            .collect(),
         selected: 0,
     }
 }

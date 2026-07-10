@@ -2,7 +2,7 @@ use std::io;
 
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::net::UnixStream;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
@@ -10,9 +10,7 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 pub type JsonFramed = Framed<UnixStream, LengthDelimitedCodec>;
 
 pub fn framed(stream: UnixStream, max_frame_size: usize) -> JsonFramed {
-    let codec = LengthDelimitedCodec::builder()
-        .max_frame_length(max_frame_size)
-        .new_codec();
+    let codec = LengthDelimitedCodec::builder().max_frame_length(max_frame_size).new_codec();
     Framed::new(stream, codec)
 }
 
@@ -29,10 +27,7 @@ pub async fn receive_json<T>(framed: &mut JsonFramed) -> Result<T, TransportErro
 where
     T: DeserializeOwned,
 {
-    let frame = framed
-        .next()
-        .await
-        .ok_or(TransportError::ConnectionClosed)??;
+    let frame = framed.next().await.ok_or(TransportError::ConnectionClosed)??;
     Ok(serde_json::from_slice(&frame)?)
 }
 

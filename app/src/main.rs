@@ -3,9 +3,9 @@
 use std::{error::Error, io, process::ExitCode};
 
 use clap::{Parser, Subcommand};
-use loncher_domain::DaemonCommand;
+use loncher_domain::{DaemonCommand, DaemonReply};
 use loncher_runtime::{dispatch_command, run_daemon};
-use tokio::signal::unix::{SignalKind, signal};
+use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -37,8 +37,10 @@ enum Command {
     Query { text: String },
     /// Open an agent session with an optional initial prompt.
     Agent { prompt: Option<String> },
-    /// Query daemon status.
+    /// Query daemon status as JSON.
     Status,
+    /// Gracefully stop the running daemon.
+    Shutdown,
 }
 
 #[tokio::main]
@@ -51,17 +53,38 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
 
     match cli.command {
         Command::Daemon => run_daemon_process().await?,
-        Command::Show { query } => dispatch_command(DaemonCommand::Show { query }).await?,
-        Command::Hide => dispatch_command(DaemonCommand::Hide).await?,
-        Command::Toggle { query } => dispatch_command(DaemonCommand::Toggle { query }).await?,
-        Command::Query { text } => dispatch_command(DaemonCommand::Query { text }).await?,
-        Command::Agent { prompt } => {
-            dispatch_command(DaemonCommand::OpenAgent { prompt }).await?;
+        Command::Show { query } => {
+            dispatch_and_report(DaemonCommand::Show { query }, false).await?;
         }
-        Command::Status => dispatch_command(DaemonCommand::Status).await?,
+        Command::Hide => dispatch_and_report(DaemonCommand::Hide, false).await?,
+        Command::Toggle { query } => {
+            dispatch_and_report(DaemonCommand::Toggle { query }, false).await?;
+        }
+        Command::Query { text } => {
+            dispatch_and_report(DaemonCommand::Query { text }, false).await?;
+        }
+        Command::Agent { prompt } => {
+            dispatch_and_report(DaemonCommand::OpenAgent { prompt }, false).await?;
+        }
+        Command::Status => dispatch_and_report(DaemonCommand::Status, true).await?,
+        Command::Shutdown => dispatch_and_report(DaemonCommand::Shutdown, false).await?,
     }
 
     Ok(ExitCode::SUCCESS)
+}
+
+async fn dispatch_and_report(
+    command: DaemonCommand,
+    print_reply: bool,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let reply = dispatch_command(command).await?;
+    if print_reply {
+        let snapshot = match reply {
+            DaemonReply::Accepted { snapshot } | DaemonReply::Status { snapshot } => snapshot,
+        };
+        println!("{}", serde_json::to_string(&snapshot)?);
+    }
+    Ok(())
 }
 
 fn init_tracing() -> Result<(), Box<dyn Error + Send + Sync>> {

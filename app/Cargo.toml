@@ -9,7 +9,7 @@ publish = false
 
 [features]
 default = []
-gui = []
+gui = ["loncher-runtime/gui"]
 sync = ["dep:loncher-sync-engine"]
 sync-client = ["sync"]
 sync-server = ["sync"]
@@ -21,6 +21,7 @@ clap.workspace = true
 dotenvy.workspace = true
 loncher-domain.workspace = true
 loncher-runtime.workspace = true
+loncher-ui-iced.workspace = true
 loncher-sync-engine = { workspace = true, optional = true }
 serde_json.workspace = true
 tokio.workspace = true

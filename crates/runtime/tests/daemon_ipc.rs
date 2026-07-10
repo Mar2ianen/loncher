@@ -14,6 +14,7 @@ use loncher_ui_contract::{
 };
 use tempfile::TempDir;
 use tokio::{
+    io::AsyncReadExt,
     net::UnixStream,
     task::{JoinHandle, JoinSet},
     time::{sleep, timeout},
@@ -214,6 +215,8 @@ async fn second_daemon_is_rejected() {
 #[tokio::test]
 async fn stale_socket_is_recovered() {
     let temp = tempfile::tempdir().expect("temporary runtime directory");
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
+        .expect("secure temporary runtime directory");
     let socket_path = temp.path().join("loncher.sock");
     let stale =
         std::os::unix::net::UnixListener::bind(&socket_path).expect("create stale socket fixture");
@@ -312,4 +315,53 @@ async fn socket_permissions_and_external_cleanup_are_enforced() {
         .expect("daemon task joins")
         .expect("daemon exits cleanly");
     assert!(!daemon.config.socket_path.exists());
+}
+
+#[tokio::test]
+async fn existing_non_private_parent_is_rejected_without_permission_changes() {
+    let temp = tempfile::tempdir().expect("temporary runtime directory");
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o755))
+        .expect("set non-private fixture permissions");
+    let config = RuntimeConfig::for_socket(temp.path().join("loncher.sock"));
+
+    let error = run_daemon_with_ui(config, CancellationToken::new(), AcceptingUi::default())
+        .await
+        .expect_err("non-private existing parent must be rejected");
+
+    assert!(matches!(error, ServerError::InsecureSocketDirectory { mode: 0o755, .. }));
+    assert_eq!(
+        fs::metadata(temp.path()).expect("parent metadata").permissions().mode() & 0o777,
+        0o755
+    );
+}
+
+#[tokio::test]
+async fn idle_client_is_disconnected_after_request_deadline() {
+    let temp = tempfile::tempdir().expect("temporary runtime directory");
+    let mut config = RuntimeConfig::for_socket(temp.path().join("loncher/loncher.sock"));
+    config.request_timeout = Duration::from_millis(50);
+    let cancellation = CancellationToken::new();
+    let daemon_cancellation = cancellation.child_token();
+    let daemon_config = config.clone();
+    let task = tokio::spawn(async move {
+        run_daemon_with_ui(daemon_config, daemon_cancellation, AcceptingUi::default()).await
+    });
+    wait_for_socket(&config.socket_path).await;
+
+    let mut idle = UnixStream::connect(&config.socket_path).await.expect("connect idle client");
+    let mut byte = [0_u8; 1];
+    let bytes_read = timeout(Duration::from_secs(1), idle.read(&mut byte))
+        .await
+        .expect("server closes idle connection before test timeout")
+        .expect("read idle connection");
+    assert_eq!(bytes_read, 0);
+
+    dispatch_command_with_config(&config, DaemonCommand::Shutdown)
+        .await
+        .expect("shutdown request succeeds");
+    timeout(Duration::from_secs(2), task)
+        .await
+        .expect("daemon stops before timeout")
+        .expect("daemon task joins")
+        .expect("daemon exits cleanly");
 }

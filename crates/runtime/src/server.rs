@@ -1,6 +1,6 @@
 use std::{
     fs, io,
-    os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
+    os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
@@ -67,7 +67,6 @@ struct BoundListener {
 async fn bind_listener(config: &RuntimeConfig) -> Result<BoundListener, ServerError> {
     let parent = config.socket_parent()?;
     prepare_parent_directory(parent)?;
-    let owner_uid = fs::metadata(parent)?.uid();
     recover_stale_socket(&config.socket_path).await?;
 
     let listener = match UnixListener::bind(&config.socket_path) {
@@ -79,24 +78,50 @@ async fn bind_listener(config: &RuntimeConfig) -> Result<BoundListener, ServerEr
     };
 
     fs::set_permissions(&config.socket_path, fs::Permissions::from_mode(0o600))?;
+    let owner_uid = fs::metadata(&config.socket_path)?.uid();
+    let parent_uid = fs::metadata(parent)?.uid();
+    if parent_uid != owner_uid {
+        drop(listener);
+        fs::remove_file(&config.socket_path)?;
+        return Err(ServerError::SocketDirectoryOwnerMismatch {
+            path: parent.to_path_buf(),
+            expected_uid: owner_uid,
+            actual_uid: parent_uid,
+        });
+    }
 
     Ok(BoundListener { listener, owner_uid })
 }
 
 fn prepare_parent_directory(parent: &Path) -> Result<(), ServerError> {
     match fs::symlink_metadata(parent) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                return Err(ServerError::UnsafeSocketPath(parent.to_path_buf()));
+        Ok(metadata) => validate_existing_parent(parent, &metadata),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let mut builder = fs::DirBuilder::new();
+            builder.mode(0o700);
+            match builder.create(parent) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    let metadata = fs::symlink_metadata(parent)?;
+                    validate_existing_parent(parent, &metadata)
+                }
+                Err(error) => Err(ServerError::Io(error)),
             }
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            fs::create_dir_all(parent)?;
-        }
-        Err(error) => return Err(ServerError::Io(error)),
+        Err(error) => Err(ServerError::Io(error)),
+    }
+}
+
+fn validate_existing_parent(parent: &Path, metadata: &fs::Metadata) -> Result<(), ServerError> {
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(ServerError::UnsafeSocketPath(parent.to_path_buf()));
     }
 
-    fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode != 0o700 {
+        return Err(ServerError::InsecureSocketDirectory { path: parent.to_path_buf(), mode });
+    }
+
     Ok(())
 }
 
@@ -135,11 +160,12 @@ async fn run_listener(
     cancellation: CancellationToken,
 ) -> Result<(), ServerError> {
     let mut connections = JoinSet::new();
+    let connection_limit = config.command_queue_capacity;
 
     loop {
         tokio::select! {
             _ = cancellation.cancelled() => break,
-            accepted = listener.accept() => {
+            accepted = listener.accept(), if connections.len() < connection_limit => {
                 let (stream, _address) = accepted?;
                 let peer_uid = stream.peer_cred()?.uid();
                 if peer_uid != expected_uid {
@@ -150,15 +176,20 @@ async fn run_listener(
                 let connection_tx = request_tx.clone();
                 let connection_cancellation = cancellation.child_token();
                 let max_frame_size = config.max_frame_size;
+                let request_timeout = config.request_timeout;
                 connections.spawn(async move {
-                    handle_connection(
-                        stream,
-                        peer_uid,
-                        max_frame_size,
-                        connection_tx,
-                        connection_cancellation,
+                    timeout(
+                        request_timeout,
+                        handle_connection(
+                            stream,
+                            peer_uid,
+                            max_frame_size,
+                            connection_tx,
+                            connection_cancellation,
+                        ),
                     )
                     .await
+                    .map_err(|_| ConnectionError::Timeout(request_timeout))?
                 });
             }
             joined = connections.join_next(), if !connections.is_empty() => {
@@ -238,12 +269,18 @@ async fn handle_connection(
         }
 
         let (reply_tx, reply_rx) = oneshot::channel();
-        request_tx
-            .send(RoutedRequest { envelope, respond_to: reply_tx })
-            .await
-            .map_err(|_| ConnectionError::RouterUnavailable)?;
+        tokio::select! {
+            _ = cancellation.cancelled() => return Ok(()),
+            sent = request_tx.send(RoutedRequest { envelope, respond_to: reply_tx }) => {
+                sent.map_err(|_| ConnectionError::RouterUnavailable)?;
+            }
+        }
 
-        let reply = reply_rx.await.map_err(|_| ConnectionError::RouterUnavailable)?;
+        let reply = tokio::select! {
+            biased;
+            reply = reply_rx => reply.map_err(|_| ConnectionError::RouterUnavailable)?,
+            _ = cancellation.cancelled() => return Ok(()),
+        };
         transport::send_json(&mut framed, &reply).await?;
         Ok(())
     }
@@ -398,6 +435,12 @@ pub enum ServerError {
     InstanceAlreadyRunning,
     #[error("unsafe socket path: {0}")]
     UnsafeSocketPath(PathBuf),
+    #[error("socket directory must have mode 0700: {path} has mode {mode:o}")]
+    InsecureSocketDirectory { path: PathBuf, mode: u32 },
+    #[error(
+        "socket directory owner mismatch for {path}: expected UID {expected_uid}, got {actual_uid}"
+    )]
+    SocketDirectoryOwnerMismatch { path: PathBuf, expected_uid: u32, actual_uid: u32 },
     #[error("socket probe failed: {0}")]
     SocketProbe(io::Error),
     #[error("daemon I/O failed: {0}")]
@@ -416,4 +459,6 @@ enum ConnectionError {
     Transport(#[from] transport::TransportError),
     #[error("daemon command router is unavailable")]
     RouterUnavailable,
+    #[error("daemon request timed out after {0:?}")]
+    Timeout(std::time::Duration),
 }

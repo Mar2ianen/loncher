@@ -14,7 +14,7 @@ use iced::{
 };
 use iced_layershell::{
     application,
-    reexport::Anchor,
+    reexport::{Anchor, KeyboardInteractivity},
     settings::{LayerShellSettings, Settings, StartMode},
     to_layer_message,
 };
@@ -92,7 +92,8 @@ pub fn run(channels: FrontendChannels) -> Result<(), iced_layershell::Error> {
     .settings(Settings {
         layer_settings: LayerShellSettings {
             anchor: Anchor::Top | Anchor::Left | Anchor::Right,
-            size: Some((0, 420)),
+            size: Some((0, 0)),
+            keyboard_interactivity: KeyboardInteractivity::None,
             start_mode: StartMode::Active,
             ..Default::default()
         },
@@ -114,7 +115,17 @@ fn update(state: &mut FrontendState, message: Message) -> Task<Message> {
                 None => Task::none(),
             });
         }
-        Message::Snapshot(snapshot) => state.snapshot = snapshot,
+        Message::Snapshot(snapshot) => {
+            let visible = snapshot.visibility == UiVisibility::Visible;
+            state.snapshot = snapshot;
+            let size = if visible { (0, 420) } else { (0, 0) };
+            let keyboard =
+                if visible { KeyboardInteractivity::OnDemand } else { KeyboardInteractivity::None };
+            return Task::batch([
+                Task::done(Message::SizeChange(size)),
+                Task::done(Message::KeyboardInteractivityChange(keyboard)),
+            ]);
+        }
         Message::QueryChanged(query) => {
             state.snapshot.query = Some(query.clone());
             let _ = state.event_tx.try_send(UiEvent::QueryChanged(query));

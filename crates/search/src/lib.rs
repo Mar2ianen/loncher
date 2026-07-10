@@ -2,7 +2,7 @@
 
 //! Application search backed by the high-level `nucleo` matcher.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use loncher_applications::ApplicationEntry;
 use nucleo::{
@@ -36,18 +36,21 @@ pub struct SearchResponse {
 pub enum SearchError {
     #[error("search worker did not produce a snapshot")]
     NoSnapshot,
+    #[error("search matcher is unavailable")]
+    MatcherUnavailable,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Candidate {
     application: ApplicationEntry,
     fields: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SearchService {
     applications: Arc<Vec<ApplicationEntry>>,
     result_limit: usize,
+    matcher: Arc<Mutex<Nucleo<Candidate>>>,
 }
 
 impl SearchService {
@@ -59,7 +62,26 @@ impl SearchService {
                 .cmp(&right.name.to_lowercase())
                 .then(left.desktop_id.cmp(&right.desktop_id))
         });
-        Self { applications: Arc::new(applications), result_limit: result_limit.max(1) }
+        let applications = Arc::new(applications);
+        let matcher: Nucleo<Candidate> = Nucleo::new(Config::DEFAULT, Arc::new(|| {}), Some(1), 1);
+        let injector = matcher.injector();
+        for application in applications.iter().cloned() {
+            let fields = vec![
+                application.name.clone(),
+                application.generic_name.clone().unwrap_or_default(),
+                application.keywords.join(" "),
+                application.desktop_id.clone(),
+            ];
+            injector.push(Candidate { application, fields }, |candidate, columns| {
+                columns[0] = Utf32String::from(candidate.fields.join(" "));
+            });
+        }
+        drop(injector);
+        Self {
+            applications,
+            result_limit: result_limit.max(1),
+            matcher: Arc::new(Mutex::new(matcher)),
+        }
     }
 
     pub fn applications(&self) -> &[ApplicationEntry] {
@@ -82,21 +104,7 @@ impl SearchService {
             });
         }
 
-        let mut matcher: Nucleo<Candidate> =
-            Nucleo::new(Config::DEFAULT, Arc::new(|| {}), Some(1), 1);
-        let injector = matcher.injector();
-        for application in self.applications.iter().cloned() {
-            let fields = vec![
-                application.name.clone(),
-                application.generic_name.clone().unwrap_or_default(),
-                application.keywords.join(" "),
-                application.desktop_id.clone(),
-            ];
-            injector.push(Candidate { application, fields }, |candidate, columns| {
-                columns[0] = Utf32String::from(candidate.fields.join(" "));
-            });
-        }
-        drop(injector);
+        let mut matcher = self.matcher.lock().map_err(|_| SearchError::MatcherUnavailable)?;
         matcher.pattern.reparse(
             0,
             &request.query,
@@ -112,6 +120,16 @@ impl SearchService {
             .map(|item| SearchResult { application: item.data.application.clone(), score: None })
             .collect();
         Ok(SearchResponse { generation: request.generation, query: request.query, results })
+    }
+
+    pub async fn search_async(
+        &self,
+        request: SearchRequest,
+    ) -> Result<SearchResponse, SearchError> {
+        let service = self.clone();
+        tokio::task::spawn_blocking(move || service.search(request))
+            .await
+            .map_err(|_| SearchError::NoSnapshot)?
     }
 
     pub fn accept_if_current(

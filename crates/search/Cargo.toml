@@ -11,3 +11,4 @@ publish = false
 loncher-applications.workspace = true
 nucleo.workspace = true
 thiserror.workspace = true
+tokio.workspace = true

@@ -16,11 +16,31 @@
 - Linux/Niri — первая целевая платформа.
 - Никаких `panic!`, `unwrap()` и `expect()` в production-коде.
 
+## Текущий вертикальный срез
+
+Phase 0 реализует один daemon process и CLI-клиент в том же binary:
+
+```text
+systemd --user / shell
+        └── loncher daemon
+              ├── owner-only Unix socket
+              ├── versioned request/reply protocol
+              ├── bounded command router
+              ├── daemon-owned state reducer
+              └── optional UiBackend
+
+Niri hotkey / shell
+        └── loncher toggle
+              └── connect → request → reply → exit
+```
+
+Socket по умолчанию: `$XDG_RUNTIME_DIR/loncher/loncher.sock`. Для тестов и разработки разрешён явный `LONCHER_SOCKET`.
+
 ## Планируемый стек
 
 - Runtime: Tokio, `tokio-util`.
 - GUI: `iced` + layer-shell integration за `ui-contract`.
-- IPC: Unix domain socket.
+- IPC: Unix domain socket, length-delimited versioned JSON.
 - Search: `nucleo`, `ignore`, `notify`.
 - Storage: SQLite/FTS5 через `rusqlite`.
 - Desktop: `.desktop`/Freedesktop icons, Niri IPC.
@@ -30,16 +50,7 @@
 - Agent: OpenAI-compatible provider layer, Cerebras, `rmcp`, Hermes-like memory.
 - Dictation: Groq STT + локальный Whisper с fallback/hedged policy.
 
-## Репозиторий
-
-- [`docs/ROADMAP.md`](docs/ROADMAP.md) — общий план проекта.
-- [`docs/PHASE-0-DAEMON.md`](docs/PHASE-0-DAEMON.md) — подробный план первого шага.
-- [`docs/SYNC.md`](docs/SYNC.md) — границы, scopes и протокол синхронизации.
-- [`AGENTS.md`](AGENTS.md) — правила для кодовых агентов и стиль проекта.
-
 ## Сборки
-
-Сейчас default build — headless daemon skeleton. GUI будет добавлен как optional feature, а не протечёт в core dependency graph.
 
 ```bash
 cargo build -p loncher --no-default-features
@@ -60,16 +71,34 @@ cargo test --workspace --all-features
 cargo run -p loncher -- daemon
 ```
 
-CLI-каркас:
+В другом shell:
 
 ```bash
-cargo run -p loncher -- toggle
-cargo run -p loncher -- show
+cargo run -p loncher -- status
 cargo run -p loncher -- hide
-cargo run -p loncher -- query zed
-cargo run -p loncher -- agent "проверь состояние systemd unit"
+cargo run -p loncher -- shutdown
 ```
 
-## Статус
+`show`, `toggle`, `query` и `agent` в headless build возвращают typed `ui_unavailable`. После подключения GUI backend те же команды начнут управлять surface без изменения IPC-контракта.
 
-Инициализирован daemon-first workspace, GUI contract и sync protocol/engine skeleton. Первый настоящий вертикальный срез остаётся прежним: daemon + IPC + show/hide/toggle без AI.
+## systemd --user
+
+Пример unit находится в [`packaging/systemd/loncher.service`](packaging/systemd/loncher.service).
+
+```bash
+install -Dm644 packaging/systemd/loncher.service \
+  ~/.config/systemd/user/loncher.service
+systemctl --user daemon-reload
+systemctl --user enable --now loncher.service
+```
+
+Unit ожидает binary в `~/.local/bin/loncher`.
+
+## Документация
+
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — общий план проекта.
+- [`docs/PHASE-0-DAEMON.md`](docs/PHASE-0-DAEMON.md) — acceptance criteria daemon/IPC.
+- [`docs/IPC-PROTOCOL.md`](docs/IPC-PROTOCOL.md) — wire format и trust boundary.
+- [`docs/REVIEW-PHASE-0.md`](docs/REVIEW-PHASE-0.md) — чеклист ревью.
+- [`docs/SYNC.md`](docs/SYNC.md) — границы, scopes и протокол синхронизации.
+- [`AGENTS.md`](AGENTS.md) — правила для кодовых агентов и стиль проекта.

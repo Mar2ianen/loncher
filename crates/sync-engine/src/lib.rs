@@ -2,9 +2,7 @@
 
 use std::collections::HashMap;
 
-use loncher_sync_protocol::{
-    DeviceId, OperationId, SyncCursor, SyncOperation, SyncProtocolError,
-};
+use loncher_sync_protocol::{DeviceId, OperationId, SyncCursor, SyncOperation, SyncProtocolError};
 use thiserror::Error;
 use tokio::sync::RwLock;
 
@@ -65,10 +63,7 @@ impl InMemorySyncEngine {
                 });
             }
 
-            let current = staged_highest
-                .get(&operation.device_id)
-                .copied()
-                .unwrap_or_default();
+            let current = staged_highest.get(&operation.device_id).copied().unwrap_or_default();
             let expected = current.saturating_add(1);
 
             if operation.device_sequence != expected {
@@ -89,10 +84,7 @@ impl InMemorySyncEngine {
         state.highest_sequence = staged_highest;
         state.operations.extend(accepted_operations);
 
-        Ok(SyncAck {
-            accepted,
-            duplicates,
-        })
+        Ok(SyncAck { accepted, duplicates })
     }
 
     pub async fn pull_after(
@@ -120,10 +112,7 @@ impl InMemorySyncEngine {
             next_cursor.advance(operation.device_id.clone(), operation.device_sequence);
         }
 
-        Ok(PullBatch {
-            operations,
-            cursor: next_cursor,
-        })
+        Ok(PullBatch { operations, cursor: next_cursor })
     }
 }
 
@@ -135,14 +124,8 @@ pub enum SyncEngineError {
     ZeroPullLimit,
     #[error("operation ID {operation_id} was reused for different content")]
     OperationIdCollision { operation_id: OperationId },
-    #[error(
-        "unexpected sequence for device {device_id}: expected {expected}, got {actual}"
-    )]
-    UnexpectedDeviceSequence {
-        device_id: DeviceId,
-        expected: u64,
-        actual: u64,
-    },
+    #[error("unexpected sequence for device {device_id}: expected {expected}, got {actual}")]
+    UnexpectedDeviceSequence { device_id: DeviceId, expected: u64, actual: u64 },
 }
 
 #[cfg(test)]
@@ -164,10 +147,7 @@ mod tests {
             entity: EntityKey::new("settings", format!("key-{sequence}"))
                 .expect("valid fixture entity key"),
             payload: SyncPayload::Put {
-                revision: Revision {
-                    device_id,
-                    counter: sequence,
-                },
+                revision: Revision { device_id, counter: sequence },
                 ciphertext: vec![sequence as u8],
             },
         }
@@ -178,10 +158,7 @@ mod tests {
         let engine = InMemorySyncEngine::default();
         let first = operation("desktop", "same", 1);
 
-        let ack = engine
-            .push_batch(vec![first.clone(), first])
-            .await
-            .expect("valid batch");
+        let ack = engine.push_batch(vec![first.clone(), first]).await.expect("valid batch");
 
         assert_eq!(ack.accepted, 1);
         assert_eq!(ack.duplicates, 1);
@@ -200,10 +177,7 @@ mod tests {
             .await
             .expect_err("conflicting operation ID must fail");
 
-        assert!(matches!(
-            error,
-            SyncEngineError::OperationIdCollision { .. }
-        ));
+        assert!(matches!(error, SyncEngineError::OperationIdCollision { .. }));
     }
 
     #[tokio::test]
@@ -230,17 +204,12 @@ mod tests {
         let engine = InMemorySyncEngine::default();
 
         engine
-            .push_batch(vec![
-                operation("desktop", "one", 1),
-                operation("desktop", "three", 3),
-            ])
+            .push_batch(vec![operation("desktop", "one", 1), operation("desktop", "three", 3)])
             .await
             .expect_err("batch with a gap must fail");
 
-        let pulled = engine
-            .pull_after(&SyncCursor::default(), 10)
-            .await
-            .expect("pull must succeed");
+        let pulled =
+            engine.pull_after(&SyncCursor::default(), 10).await.expect("pull must succeed");
 
         assert!(pulled.operations.is_empty());
     }
@@ -257,14 +226,8 @@ mod tests {
             .await
             .expect("valid batch");
 
-        let first = engine
-            .pull_after(&SyncCursor::default(), 1)
-            .await
-            .expect("valid pull");
-        let second = engine
-            .pull_after(&first.cursor, 10)
-            .await
-            .expect("valid pull");
+        let first = engine.pull_after(&SyncCursor::default(), 1).await.expect("valid pull");
+        let second = engine.pull_after(&first.cursor, 10).await.expect("valid pull");
 
         assert_eq!(first.operations.len(), 1);
         assert_eq!(second.operations.len(), 2);

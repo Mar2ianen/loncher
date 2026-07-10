@@ -66,9 +66,7 @@ pub struct UnavailableUiBackend;
 impl UiBackend for UnavailableUiBackend {
     fn dispatch(&mut self, command: UiCommand) -> Result<UiReceipt, UiError> {
         match command {
-            UiCommand::ApplySnapshot(snapshot)
-                if snapshot.visibility == UiVisibility::Visible =>
-            {
+            UiCommand::ApplySnapshot(snapshot) if snapshot.visibility == UiVisibility::Visible => {
                 Err(UiError::UnavailableInBuild)
             }
             UiCommand::ApplySnapshot(_) | UiCommand::Shutdown => Ok(UiReceipt::Accepted),

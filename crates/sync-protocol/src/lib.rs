@@ -215,8 +215,8 @@ fn validate_identifier(field: &'static str, value: &str) -> Result<(), SyncProto
 #[cfg(test)]
 mod tests {
     use super::{
-        DeviceId, EntityKey, OperationId, Revision, SYNC_SCHEMA_VERSION, SyncOperation, SyncPayload,
-        SyncProtocolError,
+        DeviceId, EntityKey, OperationId, Revision, SYNC_SCHEMA_VERSION, SyncOperation,
+        SyncPayload, SyncProtocolError,
     };
 
     fn operation(sequence: u64) -> SyncOperation {
@@ -229,10 +229,7 @@ mod tests {
             device_sequence: sequence,
             entity: EntityKey::new("settings", "theme").expect("valid fixture entity key"),
             payload: SyncPayload::Put {
-                revision: Revision {
-                    device_id,
-                    counter: sequence,
-                },
+                revision: Revision { device_id, counter: sequence },
                 ciphertext: vec![1, 2, 3],
             },
         }
@@ -240,10 +237,7 @@ mod tests {
 
     #[test]
     fn rejects_zero_sequence() {
-        assert_eq!(
-            operation(0).validate(),
-            Err(SyncProtocolError::ZeroDeviceSequence)
-        );
+        assert_eq!(operation(0).validate(), Err(SyncProtocolError::ZeroDeviceSequence));
     }
 
     #[test]

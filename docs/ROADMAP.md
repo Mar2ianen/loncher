@@ -69,7 +69,8 @@ Phase 1A implementation: [`PHASE-1A-LAUNCHER.md`](PHASE-1A-LAUNCHER.md).
 - [x] optional Iced/layer-shell frontend adapter;
 - [x] shell-free launch backend with typed unsupported cases;
 - [x] daemon event routing for selection and launch actions;
-- [ ] full launcher acceptance run on a Wayland/Niri session;
+- [ ] full launcher acceptance run on a Wayland/Niri session (surface
+      map/unmap, repeated show/hide and real launch smoke test);
 
 - [x] отдельный `ui-iced` crate с layer-shell surface на active output;
 - [ ] surface создаётся/map-ится по запросу и скрывается по `Esc`/повторному hotkey;

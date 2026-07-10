@@ -87,14 +87,25 @@ impl TestDaemon {
 async fn wait_for_socket(path: &Path) {
     timeout(Duration::from_secs(2), async {
         loop {
-            if path.exists() {
-                return;
+            match UnixStream::connect(path).await {
+                Ok(stream) => {
+                    drop(stream);
+                    return;
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                    ) =>
+                {
+                    sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("unexpected socket readiness error: {error}"),
             }
-            sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .expect("daemon socket appears");
+    .expect("daemon accepts socket connections");
 }
 
 #[tokio::test]

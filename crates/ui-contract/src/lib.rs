@@ -27,17 +27,15 @@ pub struct UiSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiCommand {
-    Show {
-        query: Option<String>,
-        mode: UiMode,
-    },
-    Hide,
-    Toggle {
-        query: Option<String>,
-        mode: UiMode,
-    },
     ApplySnapshot(UiSnapshot),
     Shutdown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UiEvent {
+    DismissRequested,
+    QueryChanged(String),
+    SubmitRequested,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,38 +53,26 @@ pub enum UiError {
 
 pub trait UiBackend: Send {
     fn dispatch(&mut self, command: UiCommand) -> Result<UiReceipt, UiError>;
-    fn snapshot(&self) -> UiSnapshot;
 }
 
 /// Headless backend used when the binary is built without a GUI implementation.
 ///
-/// It still accepts logical snapshots and shutdown/hide commands, but refuses
-/// commands that require a visible surface. This prevents a headless build from
-/// silently pretending that `show` or `toggle` succeeded.
+/// It accepts hidden snapshots and shutdown, but refuses snapshots that require
+/// a visible surface. The backend deliberately stores no authoritative state:
+/// the daemon owns the snapshot and only projects it into a frontend.
 #[derive(Debug, Default)]
-pub struct UnavailableUiBackend {
-    snapshot: UiSnapshot,
-}
+pub struct UnavailableUiBackend;
 
 impl UiBackend for UnavailableUiBackend {
     fn dispatch(&mut self, command: UiCommand) -> Result<UiReceipt, UiError> {
         match command {
-            UiCommand::ApplySnapshot(snapshot) => {
-                self.snapshot = snapshot;
-                Ok(UiReceipt::Accepted)
+            UiCommand::ApplySnapshot(snapshot)
+                if snapshot.visibility == UiVisibility::Visible =>
+            {
+                Err(UiError::UnavailableInBuild)
             }
-            UiCommand::Hide => {
-                self.snapshot.visibility = UiVisibility::Hidden;
-                self.snapshot.generation = self.snapshot.generation.saturating_add(1);
-                Ok(UiReceipt::Accepted)
-            }
-            UiCommand::Shutdown => Ok(UiReceipt::Accepted),
-            UiCommand::Show { .. } | UiCommand::Toggle { .. } => Err(UiError::UnavailableInBuild),
+            UiCommand::ApplySnapshot(_) | UiCommand::Shutdown => Ok(UiReceipt::Accepted),
         }
-    }
-
-    fn snapshot(&self) -> UiSnapshot {
-        self.snapshot.clone()
     }
 }
 
@@ -97,30 +83,25 @@ mod tests {
     };
 
     #[test]
-    fn headless_backend_rejects_visible_surface_commands() {
-        let mut backend = UnavailableUiBackend::default();
+    fn headless_backend_rejects_visible_snapshot() {
+        let mut backend = UnavailableUiBackend;
 
-        let result = backend.dispatch(UiCommand::Show {
-            query: None,
+        let result = backend.dispatch(UiCommand::ApplySnapshot(UiSnapshot {
+            visibility: UiVisibility::Visible,
             mode: UiMode::Launcher,
-        });
+            query: None,
+            generation: 1,
+        }));
 
         assert!(matches!(result, Err(UiError::UnavailableInBuild)));
     }
 
     #[test]
-    fn headless_backend_accepts_logical_snapshots() {
-        let mut backend = UnavailableUiBackend::default();
-        let snapshot = UiSnapshot {
-            visibility: UiVisibility::Visible,
-            mode: UiMode::Agent,
-            query: Some("status".to_owned()),
-            generation: 7,
-        };
+    fn headless_backend_accepts_hidden_snapshot() {
+        let mut backend = UnavailableUiBackend;
 
-        let result = backend.dispatch(UiCommand::ApplySnapshot(snapshot.clone()));
+        let result = backend.dispatch(UiCommand::ApplySnapshot(UiSnapshot::default()));
 
         assert!(result.is_ok());
-        assert_eq!(backend.snapshot(), snapshot);
     }
 }

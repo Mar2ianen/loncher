@@ -28,6 +28,8 @@ jobs:
         with:
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Install Wayland build dependencies
+        run: sudo apt-get update && sudo apt-get install --yes libxkbcommon-dev
       - name: Format sources
         run: cargo fmt --all
       - name: Check formatting diff
@@ -86,5 +88,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88.0
       - uses: Swatinem/rust-cache@v2
+      - name: Install Wayland build dependencies
+        if: matrix.name == 'desktop' || matrix.name == 'full'
+        run: sudo apt-get update && sudo apt-get install --yes libxkbcommon-dev
       - name: Check ${{ matrix.name }}
         run: cargo check -p loncher ${{ matrix.args }}

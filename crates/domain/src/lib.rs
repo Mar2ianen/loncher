@@ -99,11 +99,7 @@ impl DaemonState {
     }
 
     fn observable_state(&self) -> (UiVisibility, LauncherMode, &Option<String>) {
-        (
-            self.snapshot.visibility,
-            self.snapshot.mode,
-            &self.snapshot.query,
-        )
+        (self.snapshot.visibility, self.snapshot.mode, &self.snapshot.query)
     }
 }
 
@@ -166,11 +162,7 @@ pub struct RequestEnvelope {
 
 impl RequestEnvelope {
     pub fn new(request_id: RequestId, command: DaemonCommand) -> Self {
-        Self {
-            protocol_version: DAEMON_PROTOCOL_VERSION,
-            request_id,
-            command,
-        }
+        Self { protocol_version: DAEMON_PROTOCOL_VERSION, request_id, command }
     }
 }
 
@@ -225,10 +217,7 @@ pub struct ProtocolError {
 
 impl ProtocolError {
     pub fn new(code: ProtocolErrorCode, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-        }
+        Self { code, message: message.into() }
     }
 }
 
@@ -249,9 +238,7 @@ mod tests {
 
     #[test]
     fn rejects_empty_query() {
-        let command = DaemonCommand::Query {
-            text: "   ".to_owned(),
-        };
+        let command = DaemonCommand::Query { text: "   ".to_owned() };
 
         assert_eq!(command.validate(), Err(CommandValidationError::EmptyQuery));
     }
@@ -259,9 +246,7 @@ mod tests {
     #[test]
     fn show_is_idempotent_and_generation_tracks_changes() {
         let state = DaemonState::default();
-        let command = DaemonCommand::Show {
-            query: Some("zed".to_owned()),
-        };
+        let command = DaemonCommand::Show { query: Some("zed".to_owned()) };
 
         let visible = state.reduce(&command).expect("valid transition");
         let repeated = visible.reduce(&command).expect("valid transition");
@@ -275,9 +260,7 @@ mod tests {
     fn agent_transition_sets_mode() {
         let state = DaemonState::default();
         let next = state
-            .reduce(&DaemonCommand::OpenAgent {
-                prompt: Some("status".to_owned()),
-            })
+            .reduce(&DaemonCommand::OpenAgent { prompt: Some("status".to_owned()) })
             .expect("valid transition");
 
         assert_eq!(next.snapshot().mode, LauncherMode::Agent);
@@ -288,9 +271,7 @@ mod tests {
     fn reply_wire_shape_is_stable() {
         let reply = ReplyEnvelope::success(
             RequestId::new(7),
-            super::DaemonReply::Status {
-                snapshot: Default::default(),
-            },
+            super::DaemonReply::Status { snapshot: Default::default() },
         );
         let json = serde_json::to_value(reply).expect("serializable reply");
 
@@ -298,9 +279,7 @@ mod tests {
         assert_eq!(json["request_id"], 7);
         assert_eq!(json["payload"]["status"], "success");
         assert!(matches!(
-            serde_json::from_value::<ReplyEnvelope>(json)
-                .expect("deserializable reply")
-                .payload,
+            serde_json::from_value::<ReplyEnvelope>(json).expect("deserializable reply").payload,
             ReplyPayload::Success { .. }
         ));
     }

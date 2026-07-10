@@ -7,7 +7,7 @@ mod transport;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub use config::{ConfigError, RuntimeConfig};
-pub use server::{run_daemon_with_ui, ServerError};
+pub use server::{ServerError, run_daemon_with_ui};
 
 use loncher_domain::{
     DaemonCommand, DaemonReply, ProtocolErrorCode, ReplyPayload, RequestEnvelope, RequestId,
@@ -41,17 +41,14 @@ pub async fn dispatch_command_with_config(
     config: &RuntimeConfig,
     command: DaemonCommand,
 ) -> Result<DaemonReply, ClientError> {
-    command
-        .validate()
-        .map_err(|error| ClientError::InvalidCommand(error.to_string()))?;
+    command.validate().map_err(|error| ClientError::InvalidCommand(error.to_string()))?;
 
     let request_id = RequestId::new(NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed));
     let request = RequestEnvelope::new(request_id, command);
 
     timeout(config.request_timeout, async {
-        let stream = UnixStream::connect(&config.socket_path)
-            .await
-            .map_err(ClientError::Connect)?;
+        let stream =
+            UnixStream::connect(&config.socket_path).await.map_err(ClientError::Connect)?;
         let mut framed = transport::framed(stream, config.max_frame_size);
         transport::send_json(&mut framed, &request).await?;
         let reply = transport::receive_json::<loncher_domain::ReplyEnvelope>(&mut framed).await?;
@@ -65,10 +62,9 @@ pub async fn dispatch_command_with_config(
 
         match reply.payload {
             ReplyPayload::Success { reply } => Ok(reply),
-            ReplyPayload::Error { error } => Err(ClientError::Remote {
-                code: error.code,
-                message: error.message,
-            }),
+            ReplyPayload::Error { error } => {
+                Err(ClientError::Remote { code: error.code, message: error.message })
+            }
         }
     })
     .await
@@ -96,13 +92,7 @@ pub enum ClientError {
     #[error("daemon request timed out after {0:?}")]
     Timeout(std::time::Duration),
     #[error("daemon reply request ID mismatch: expected {expected:?}, got {actual:?}")]
-    RequestIdMismatch {
-        expected: RequestId,
-        actual: RequestId,
-    },
+    RequestIdMismatch { expected: RequestId, actual: RequestId },
     #[error("daemon rejected request ({code:?}): {message}")]
-    Remote {
-        code: ProtocolErrorCode,
-        message: String,
-    },
+    Remote { code: ProtocolErrorCode, message: String },
 }

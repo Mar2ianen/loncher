@@ -11,7 +11,8 @@ ranking, SQLite, Niri IPC or file search.
 - `ui-contract` contains only framework-neutral snapshots, application view
   models and input events.
 - `ui-iced` is the optional Iced/layer-shell leaf adapter.
-- `runtime` owns discovery startup, the search service and UI projection.
+- `runtime` owns discovery startup, the search service, UI projection,
+  selection and launch event routing.
 
 Discovery runs outside Tokio worker threads. User data directories take
 precedence over system data directories; the first desktop ID wins. Invalid
@@ -25,6 +26,11 @@ an older asynchronous response from replacing a newer query.
 Launching uses parsed argv and `std::process::Command`; it never passes an
 Exec field through a shell. Terminal entries and D-Bus activation are explicit
 unsupported errors in this slice.
+
+GUI events are bridged back to the daemon through a bounded standard-library
+channel. Esc hides, arrows clamp daemon-owned selection, Tab completes the
+selected result, and Enter launches then hides only after a successful launch
+request.
 
 ## Dependencies and MSRV
 

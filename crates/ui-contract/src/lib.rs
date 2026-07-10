@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::mpsc};
 
 use thiserror::Error;
 
@@ -67,6 +67,9 @@ pub enum UiError {
 
 pub trait UiBackend: Send {
     fn dispatch(&mut self, command: UiCommand) -> Result<UiReceipt, UiError>;
+    fn take_event_receiver(&mut self) -> Option<mpsc::Receiver<UiEvent>> {
+        None
+    }
 }
 
 /// Headless backend used when the binary is built without a GUI implementation.

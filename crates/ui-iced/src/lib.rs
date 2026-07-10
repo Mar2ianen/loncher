@@ -4,7 +4,7 @@
 
 use std::{
     hash::{Hash, Hasher},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc as std_mpsc},
 };
 
 use iced::{
@@ -27,22 +27,30 @@ use iced::futures::{SinkExt, StreamExt, channel::mpsc};
 #[derive(Clone)]
 pub struct IcedUiBackend {
     snapshot_tx: mpsc::Sender<UiSnapshot>,
+    event_rx: Arc<Mutex<Option<std_mpsc::Receiver<UiEvent>>>>,
 }
 
 pub struct FrontendChannels {
     pub backend: IcedUiBackend,
     snapshot_rx: mpsc::Receiver<UiSnapshot>,
-    event_tx: mpsc::Sender<UiEvent>,
-    pub event_rx: mpsc::Receiver<UiEvent>,
+    event_tx: std_mpsc::Sender<UiEvent>,
 }
 
 pub fn channels() -> FrontendChannels {
     let (snapshot_tx, snapshot_rx) = mpsc::channel(32);
-    let (event_tx, event_rx) = mpsc::channel(32);
-    FrontendChannels { backend: IcedUiBackend { snapshot_tx }, snapshot_rx, event_tx, event_rx }
+    let (event_tx, event_rx) = std_mpsc::channel();
+    FrontendChannels {
+        backend: IcedUiBackend { snapshot_tx, event_rx: Arc::new(Mutex::new(Some(event_rx))) },
+        snapshot_rx,
+        event_tx,
+    }
 }
 
 impl UiBackend for IcedUiBackend {
+    fn take_event_receiver(&mut self) -> Option<std_mpsc::Receiver<UiEvent>> {
+        self.event_rx.lock().ok()?.take()
+    }
+
     fn dispatch(&mut self, command: UiCommand) -> Result<UiReceipt, UiError> {
         match command {
             UiCommand::ApplySnapshot(snapshot) => {
@@ -94,7 +102,7 @@ pub fn run(channels: FrontendChannels) -> Result<(), iced_layershell::Error> {
 
 struct FrontendState {
     snapshot: UiSnapshot,
-    event_tx: mpsc::Sender<UiEvent>,
+    event_tx: std_mpsc::Sender<UiEvent>,
 }
 
 fn update(state: &mut FrontendState, message: Message) -> Task<Message> {
@@ -108,24 +116,24 @@ fn update(state: &mut FrontendState, message: Message) -> Task<Message> {
         Message::Snapshot(snapshot) => state.snapshot = snapshot,
         Message::QueryChanged(query) => {
             state.snapshot.query = Some(query.clone());
-            let _ = state.event_tx.try_send(UiEvent::QueryChanged(query));
+            let _ = state.event_tx.send(UiEvent::QueryChanged(query));
         }
         Message::Event(Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. })) => {
             match key {
                 keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                    let _ = state.event_tx.try_send(UiEvent::DismissRequested);
+                    let _ = state.event_tx.send(UiEvent::DismissRequested);
                 }
                 keyboard::Key::Named(keyboard::key::Named::ArrowDown) if modifiers.is_empty() => {
-                    let _ = state.event_tx.try_send(UiEvent::MoveSelection { delta: 1 });
+                    let _ = state.event_tx.send(UiEvent::MoveSelection { delta: 1 });
                 }
                 keyboard::Key::Named(keyboard::key::Named::ArrowUp) if modifiers.is_empty() => {
-                    let _ = state.event_tx.try_send(UiEvent::MoveSelection { delta: -1 });
+                    let _ = state.event_tx.send(UiEvent::MoveSelection { delta: -1 });
                 }
                 keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                    let _ = state.event_tx.try_send(UiEvent::SubmitRequested);
+                    let _ = state.event_tx.send(UiEvent::SubmitRequested);
                 }
                 keyboard::Key::Named(keyboard::key::Named::Tab) => {
-                    let _ = state.event_tx.try_send(UiEvent::CompleteSelection);
+                    let _ = state.event_tx.send(UiEvent::CompleteSelection);
                 }
                 _ => {}
             }

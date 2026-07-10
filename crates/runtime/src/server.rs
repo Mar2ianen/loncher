@@ -2,9 +2,10 @@ use std::{
     fs, io,
     os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
+    sync::mpsc::TryRecvError,
 };
 
-use loncher_applications::ApplicationEntry;
+use loncher_applications::{ApplicationEntry, LaunchBackend, ProcessLaunchBackend};
 use loncher_domain::{
     DAEMON_PROTOCOL_VERSION, DaemonCommand, DaemonReply, DaemonState, LauncherMode, ProtocolError,
     ProtocolErrorCode, ReplyEnvelope, RequestEnvelope, RequestId, UiVisibility,
@@ -318,6 +319,8 @@ where
 {
     let mut state = DaemonState::default();
     let search = SearchService::new(applications, 12);
+    let mut launch_backend = ProcessLaunchBackend;
+    let mut ui_events = ui.take_event_receiver();
     ui.dispatch(UiCommand::ApplySnapshot(to_ui_snapshot(&state.snapshot(), &search)))?;
 
     loop {
@@ -337,6 +340,15 @@ where
                 if shutdown {
                     cancellation.cancel();
                     break;
+                }
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(10)), if ui_events.is_some() => {
+                if let Some(receiver) = ui_events.as_ref() {
+                    match receiver.try_recv() {
+                        Ok(event) => handle_ui_event(event, &mut state, &mut ui, &search, &mut launch_backend),
+                        Err(TryRecvError::Empty) => {},
+                        Err(TryRecvError::Disconnected) => ui_events = None,
+                    }
                 }
             }
         }
@@ -394,6 +406,77 @@ where
     ReplyEnvelope::success(request_id, DaemonReply::Accepted { snapshot: state.snapshot() })
 }
 
+fn handle_ui_event<U>(
+    event: loncher_ui_contract::UiEvent,
+    state: &mut DaemonState,
+    ui: &mut U,
+    search: &SearchService,
+    launch_backend: &mut impl LaunchBackend,
+) where
+    U: UiBackend,
+{
+    let command = match event {
+        loncher_ui_contract::UiEvent::DismissRequested => DaemonCommand::Hide,
+        loncher_ui_contract::UiEvent::QueryChanged(text) => DaemonCommand::Query { text },
+        loncher_ui_contract::UiEvent::MoveSelection { delta } => {
+            let count = search
+                .search(SearchRequest {
+                    generation: state.snapshot().generation,
+                    query: state.snapshot().query.clone().unwrap_or_default(),
+                })
+                .map(|response| response.results.len())
+                .unwrap_or(0);
+            let max = count.saturating_sub(1);
+            let current = state.snapshot().selected as i32;
+            let next = current.saturating_add(delta).clamp(0, max as i32) as usize;
+            DaemonCommand::Select { index: next }
+        }
+        loncher_ui_contract::UiEvent::CompleteSelection => {
+            let response = search
+                .search(SearchRequest {
+                    generation: state.snapshot().generation,
+                    query: state.snapshot().query.clone().unwrap_or_default(),
+                })
+                .ok();
+            let query = response
+                .and_then(|response| {
+                    response
+                        .results
+                        .get(state.snapshot().selected)
+                        .map(|result| result.application.name.clone())
+                })
+                .unwrap_or_default();
+            if query.is_empty() {
+                return;
+            }
+            DaemonCommand::Query { text: query }
+        }
+        loncher_ui_contract::UiEvent::SubmitRequested => {
+            let response = search
+                .search(SearchRequest {
+                    generation: state.snapshot().generation,
+                    query: state.snapshot().query.clone().unwrap_or_default(),
+                })
+                .ok();
+            let Some(application) = response.and_then(|response| {
+                response
+                    .results
+                    .get(state.snapshot().selected)
+                    .map(|result| result.application.clone())
+            }) else {
+                return;
+            };
+            if launch_backend.launch(&application).is_ok() {
+                DaemonCommand::Hide
+            } else {
+                return;
+            }
+        }
+    };
+    let request_id = RequestId::UNKNOWN;
+    let _ = route_command(state, ui, request_id, &command, search);
+}
+
 fn to_ui_snapshot(snapshot: &loncher_domain::DaemonSnapshot, search: &SearchService) -> UiSnapshot {
     let response = search
         .search(SearchRequest {
@@ -427,7 +510,7 @@ fn to_ui_snapshot(snapshot: &loncher_domain::DaemonSnapshot, search: &SearchServ
                 icon_path: result.application.icon.and_then(|icon| icon.resolved_path),
             })
             .collect(),
-        selected: 0,
+        selected: snapshot.selected,
     }
 }
 

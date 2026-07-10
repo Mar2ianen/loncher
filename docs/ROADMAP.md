@@ -68,7 +68,7 @@ Phase 1A implementation: [`PHASE-1A-LAUNCHER.md`](PHASE-1A-LAUNCHER.md).
 - [x] framework-neutral application result contracts;
 - [x] optional Iced/layer-shell frontend adapter;
 - [x] shell-free launch backend with typed unsupported cases;
-- [ ] daemon event routing for selection and launch actions;
+- [x] daemon event routing for selection and launch actions;
 - [ ] full launcher acceptance run on a Wayland/Niri session;
 
 - [x] отдельный `ui-iced` crate с layer-shell surface на active output;

@@ -44,6 +44,7 @@ pub struct DaemonSnapshot {
     pub mode: LauncherMode,
     pub query: Option<String>,
     pub generation: u64,
+    pub selected: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -88,7 +89,8 @@ impl DaemonState {
                 next.snapshot.mode = LauncherMode::Agent;
                 next.snapshot.query = prompt.clone();
             }
-            DaemonCommand::Status | DaemonCommand::Shutdown => {}
+            DaemonCommand::Select { index } => next.snapshot.selected = *index,
+            DaemonCommand::Status | DaemonCommand::Shutdown | DaemonCommand::Launch { .. } => {}
         }
 
         if next.observable_state() != self.observable_state() {
@@ -111,6 +113,8 @@ pub enum DaemonCommand {
     Toggle { query: Option<String> },
     Query { text: String },
     OpenAgent { prompt: Option<String> },
+    Select { index: usize },
+    Launch { desktop_id: String },
     Status,
     Shutdown,
 }
@@ -129,6 +133,9 @@ impl DaemonCommand {
             Self::OpenAgent { prompt: Some(prompt) } if prompt.trim().is_empty() => {
                 Err(CommandValidationError::EmptyPrompt)
             }
+            Self::Launch { desktop_id } if desktop_id.trim().is_empty() => {
+                Err(CommandValidationError::EmptyDesktopId)
+            }
             _ => Ok(()),
         }
     }
@@ -140,6 +147,8 @@ impl DaemonCommand {
             Self::Toggle { .. } => "toggle",
             Self::Query { .. } => "query",
             Self::OpenAgent { .. } => "open_agent",
+            Self::Select { .. } => "select",
+            Self::Launch { .. } => "launch",
             Self::Status => "status",
             Self::Shutdown => "shutdown",
         }
@@ -227,6 +236,8 @@ pub enum CommandValidationError {
     EmptyQuery,
     #[error("agent prompt must not be empty")]
     EmptyPrompt,
+    #[error("desktop ID must not be empty")]
+    EmptyDesktopId,
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@ use std::{error::Error, io, process::ExitCode};
 use clap::{Parser, Subcommand};
 use loncher_domain::{DaemonCommand, DaemonReply};
 use loncher_runtime::{dispatch_command, run_daemon};
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;

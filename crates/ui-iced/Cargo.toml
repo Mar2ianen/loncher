@@ -11,6 +11,7 @@ publish = false
 iced = { workspace = true, optional = true }
 iced_layershell = { workspace = true, optional = true }
 loncher-ui-contract.workspace = true
+tokio.workspace = true
 thiserror.workspace = true
 
 [features]

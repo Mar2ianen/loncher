@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::{path::PathBuf, sync::mpsc};
+use std::path::PathBuf;
+
+use tokio::sync::mpsc;
 
 use thiserror::Error;
 

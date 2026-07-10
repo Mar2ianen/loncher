@@ -66,6 +66,7 @@ impl DaemonState {
                 next.snapshot.visibility = UiVisibility::Visible;
                 next.snapshot.mode = LauncherMode::Launcher;
                 next.snapshot.query = query.clone();
+                next.snapshot.selected = 0;
             }
             DaemonCommand::Hide => {
                 next.snapshot.visibility = UiVisibility::Hidden;
@@ -77,12 +78,14 @@ impl DaemonState {
                     next.snapshot.visibility = UiVisibility::Visible;
                     next.snapshot.mode = LauncherMode::Launcher;
                     next.snapshot.query = query.clone();
+                    next.snapshot.selected = 0;
                 }
             }
             DaemonCommand::Query { text } => {
                 next.snapshot.visibility = UiVisibility::Visible;
                 next.snapshot.mode = LauncherMode::Launcher;
                 next.snapshot.query = Some(text.clone());
+                next.snapshot.selected = 0;
             }
             DaemonCommand::OpenAgent { prompt } => {
                 next.snapshot.visibility = UiVisibility::Visible;
@@ -122,9 +125,6 @@ pub enum DaemonCommand {
 impl DaemonCommand {
     pub fn validate(&self) -> Result<(), CommandValidationError> {
         match self {
-            Self::Query { text } if text.trim().is_empty() => {
-                Err(CommandValidationError::EmptyQuery)
-            }
             Self::Show { query: Some(query) } | Self::Toggle { query: Some(query) }
                 if query.trim().is_empty() =>
             {
@@ -243,15 +243,15 @@ pub enum CommandValidationError {
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandValidationError, DaemonCommand, DaemonState, LauncherMode, ReplyEnvelope,
-        ReplyPayload, RequestId, UiVisibility,
+        DaemonCommand, DaemonState, LauncherMode, ReplyEnvelope, ReplyPayload, RequestId,
+        UiVisibility,
     };
 
     #[test]
-    fn rejects_empty_query() {
+    fn accepts_empty_query_as_clear() {
         let command = DaemonCommand::Query { text: "   ".to_owned() };
 
-        assert_eq!(command.validate(), Err(CommandValidationError::EmptyQuery));
+        assert!(command.validate().is_ok());
     }
 
     #[test]

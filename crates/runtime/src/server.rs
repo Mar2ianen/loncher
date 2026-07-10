@@ -2,7 +2,6 @@ use std::{
     fs, io,
     os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
-    sync::mpsc::TryRecvError,
 };
 
 use loncher_applications::{ApplicationEntry, LaunchBackend, ProcessLaunchBackend};
@@ -358,16 +357,23 @@ where
                     break;
                 }
             }
-            _ = tokio::time::sleep(std::time::Duration::from_millis(10)), if ui_events.is_some() => {
+            ui_event = async {
+                match ui_events.as_mut() {
+                    Some(receiver) => receiver.recv().await,
+                    None => None,
+                }
+            }, if ui_events.is_some() => {
                 if let Err(error) = launch_backend.reap_finished() {
                     warn!(%error, "failed to reap launched application");
                 }
-                if let Some(receiver) = ui_events.as_ref() {
-                    match receiver.try_recv() {
-                        Ok(event) => handle_ui_event(event, &mut state, &mut ui, &search, &mut launch_backend),
-                        Err(TryRecvError::Empty) => {},
-                        Err(TryRecvError::Disconnected) => ui_events = None,
-                    }
+                match ui_event {
+                    Some(event) => handle_ui_event(event, &mut state, &mut ui, &search, &mut launch_backend),
+                    None => ui_events = None,
+                }
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
+                if let Err(error) = launch_backend.reap_finished() {
+                    warn!(%error, "failed to reap launched application");
                 }
             }
         }
@@ -464,7 +470,9 @@ fn handle_ui_event<U>(
                 .and_then(|response| {
                     response
                         .results
-                        .get(state.snapshot().selected)
+                        .get(
+                            state.snapshot().selected.min(response.results.len().saturating_sub(1)),
+                        )
                         .map(|result| result.application.name.clone())
                 })
                 .unwrap_or_default();
@@ -483,7 +491,7 @@ fn handle_ui_event<U>(
             let Some(application) = response.and_then(|response| {
                 response
                     .results
-                    .get(state.snapshot().selected)
+                    .get(state.snapshot().selected.min(response.results.len().saturating_sub(1)))
                     .map(|result| result.application.clone())
             }) else {
                 return;
@@ -510,6 +518,16 @@ fn to_ui_snapshot(snapshot: &loncher_domain::DaemonSnapshot, search: &SearchServ
             query: String::new(),
             results: Vec::new(),
         });
+    let results = response
+        .results
+        .into_iter()
+        .map(|result| loncher_ui_contract::ApplicationViewModel {
+            desktop_id: result.application.desktop_id,
+            name: result.application.name,
+            generic_name: result.application.generic_name,
+            icon_path: result.application.icon.and_then(|icon| icon.resolved_path),
+        })
+        .collect::<Vec<_>>();
     UiSnapshot {
         visibility: match snapshot.visibility {
             UiVisibility::Hidden => ContractVisibility::Hidden,
@@ -522,17 +540,8 @@ fn to_ui_snapshot(snapshot: &loncher_domain::DaemonSnapshot, search: &SearchServ
         },
         query: snapshot.query.clone(),
         generation: snapshot.generation,
-        results: response
-            .results
-            .into_iter()
-            .map(|result| loncher_ui_contract::ApplicationViewModel {
-                desktop_id: result.application.desktop_id,
-                name: result.application.name,
-                generic_name: result.application.generic_name,
-                icon_path: result.application.icon.and_then(|icon| icon.resolved_path),
-            })
-            .collect(),
-        selected: snapshot.selected,
+        selected: snapshot.selected.min(results.len().saturating_sub(1)),
+        results,
     }
 }
 

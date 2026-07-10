@@ -4,7 +4,7 @@
 
 use std::{
     hash::{Hash, Hasher},
-    sync::{Arc, Mutex, mpsc as std_mpsc},
+    sync::{Arc, Mutex},
 };
 
 use iced::{
@@ -22,23 +22,24 @@ use loncher_ui_contract::{
     UiBackend, UiCommand, UiError, UiEvent, UiReceipt, UiSnapshot, UiVisibility,
 };
 
-use iced::futures::{SinkExt, StreamExt, channel::mpsc};
+use iced::futures::{SinkExt, StreamExt, channel::mpsc as iced_mpsc};
+use tokio::sync::mpsc;
 
 #[derive(Clone)]
 pub struct IcedUiBackend {
-    snapshot_tx: mpsc::Sender<UiSnapshot>,
-    event_rx: Arc<Mutex<Option<std_mpsc::Receiver<UiEvent>>>>,
+    snapshot_tx: iced_mpsc::Sender<UiSnapshot>,
+    event_rx: Arc<Mutex<Option<mpsc::Receiver<UiEvent>>>>,
 }
 
 pub struct FrontendChannels {
     pub backend: IcedUiBackend,
-    snapshot_rx: mpsc::Receiver<UiSnapshot>,
-    event_tx: std_mpsc::Sender<UiEvent>,
+    snapshot_rx: iced_mpsc::Receiver<UiSnapshot>,
+    event_tx: mpsc::Sender<UiEvent>,
 }
 
 pub fn channels() -> FrontendChannels {
-    let (snapshot_tx, snapshot_rx) = mpsc::channel(32);
-    let (event_tx, event_rx) = std_mpsc::channel();
+    let (snapshot_tx, snapshot_rx) = iced_mpsc::channel(32);
+    let (event_tx, event_rx) = mpsc::channel(64);
     FrontendChannels {
         backend: IcedUiBackend { snapshot_tx, event_rx: Arc::new(Mutex::new(Some(event_rx))) },
         snapshot_rx,
@@ -47,7 +48,7 @@ pub fn channels() -> FrontendChannels {
 }
 
 impl UiBackend for IcedUiBackend {
-    fn take_event_receiver(&mut self) -> Option<std_mpsc::Receiver<UiEvent>> {
+    fn take_event_receiver(&mut self) -> Option<mpsc::Receiver<UiEvent>> {
         self.event_rx.lock().ok()?.take()
     }
 
@@ -102,7 +103,7 @@ pub fn run(channels: FrontendChannels) -> Result<(), iced_layershell::Error> {
 
 struct FrontendState {
     snapshot: UiSnapshot,
-    event_tx: std_mpsc::Sender<UiEvent>,
+    event_tx: mpsc::Sender<UiEvent>,
 }
 
 fn update(state: &mut FrontendState, message: Message) -> Task<Message> {
@@ -116,24 +117,24 @@ fn update(state: &mut FrontendState, message: Message) -> Task<Message> {
         Message::Snapshot(snapshot) => state.snapshot = snapshot,
         Message::QueryChanged(query) => {
             state.snapshot.query = Some(query.clone());
-            let _ = state.event_tx.send(UiEvent::QueryChanged(query));
+            let _ = state.event_tx.try_send(UiEvent::QueryChanged(query));
         }
         Message::Event(Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. })) => {
             match key {
                 keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                    let _ = state.event_tx.send(UiEvent::DismissRequested);
+                    let _ = state.event_tx.try_send(UiEvent::DismissRequested);
                 }
                 keyboard::Key::Named(keyboard::key::Named::ArrowDown) if modifiers.is_empty() => {
-                    let _ = state.event_tx.send(UiEvent::MoveSelection { delta: 1 });
+                    let _ = state.event_tx.try_send(UiEvent::MoveSelection { delta: 1 });
                 }
                 keyboard::Key::Named(keyboard::key::Named::ArrowUp) if modifiers.is_empty() => {
-                    let _ = state.event_tx.send(UiEvent::MoveSelection { delta: -1 });
+                    let _ = state.event_tx.try_send(UiEvent::MoveSelection { delta: -1 });
                 }
                 keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                    let _ = state.event_tx.send(UiEvent::SubmitRequested);
+                    let _ = state.event_tx.try_send(UiEvent::SubmitRequested);
                 }
                 keyboard::Key::Named(keyboard::key::Named::Tab) => {
-                    let _ = state.event_tx.send(UiEvent::CompleteSelection);
+                    let _ = state.event_tx.try_send(UiEvent::CompleteSelection);
                 }
                 _ => {}
             }
@@ -163,7 +164,7 @@ fn view(state: &FrontendState) -> Element<'_, Message, Theme, iced::Renderer> {
 }
 
 struct SnapshotSource {
-    receiver: Mutex<Option<mpsc::Receiver<UiSnapshot>>>,
+    receiver: Mutex<Option<iced_mpsc::Receiver<UiSnapshot>>>,
 }
 
 impl Hash for SnapshotSource {

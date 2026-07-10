@@ -1698,6 +1698,7 @@ name = "loncher-ui-contract"
 version = "0.1.0"
 dependencies = [
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -1708,6 +1709,7 @@ dependencies = [
  "iced_layershell",
  "loncher-ui-contract",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

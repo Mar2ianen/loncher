@@ -4,7 +4,11 @@ use std::{error::Error, io, process::ExitCode};
 
 use clap::{Parser, Subcommand};
 use loncher_domain::{DaemonCommand, DaemonReply};
-use loncher_runtime::{dispatch_command, run_daemon};
+use loncher_runtime::dispatch_command;
+#[cfg(not(feature = "gui"))]
+use loncher_runtime::run_daemon;
+#[cfg(feature = "gui")]
+use loncher_runtime::run_daemon_gui;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -111,7 +115,16 @@ fn report_dotenv_result(result: Result<std::path::PathBuf, dotenvy::Error>) {
 async fn run_daemon_process() -> Result<(), Box<dyn Error + Send + Sync>> {
     let cancellation = CancellationToken::new();
     let daemon_cancellation = cancellation.child_token();
-    let mut daemon = tokio::spawn(async move { run_daemon(daemon_cancellation).await });
+    let mut daemon = tokio::spawn(async move {
+        #[cfg(feature = "gui")]
+        {
+            run_daemon_gui(daemon_cancellation).await
+        }
+        #[cfg(not(feature = "gui"))]
+        {
+            run_daemon(daemon_cancellation).await
+        }
+    });
 
     info!("daemon started");
 

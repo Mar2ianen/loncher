@@ -61,11 +61,21 @@ UI напрямую использует typed Rust services. Agent исполь
 
 ## Phase 1 — launcher MVP
 
-- [ ] отдельный `ui-iced` crate с layer-shell surface на focused output Niri;
+Phase 1A implementation: [`PHASE-1A-LAUNCHER.md`](PHASE-1A-LAUNCHER.md).
+
+- [x] application discovery and normalized desktop entries;
+- [x] high-level `nucleo` fuzzy search with bounded snapshots;
+- [x] framework-neutral application result contracts;
+- [x] optional Iced/layer-shell frontend adapter;
+- [x] shell-free launch backend with typed unsupported cases;
+- [ ] daemon event routing for selection and launch actions;
+- [ ] full launcher acceptance run on a Wayland/Niri session;
+
+- [x] отдельный `ui-iced` crate с layer-shell surface на active output;
 - [ ] surface создаётся/map-ится по запросу и скрывается по `Esc`/повторному hotkey;
-- [ ] парсинг `.desktop`: `Name`, `GenericName`, `Keywords`, `Exec`, `Icon`, actions, `NoDisplay`;
-- [ ] Freedesktop icon lookup и fallback;
-- [ ] `nucleo` fuzzy search;
+- [x] парсинг `.desktop`: `Name`, `GenericName`, `Keywords`, `Exec`, `Icon`, actions, `NoDisplay`;
+- [x] Freedesktop icon lookup и fallback;
+- [x] `nucleo` fuzzy search;
 - [ ] case folding, RU↔EN layout correction, typo/translit candidates и aliases;
 - [ ] ranking: exact/prefix, frequency, recency, explicit alias, context;
 - [ ] apps grid и плотная двухколоночная выдача;

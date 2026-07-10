@@ -179,10 +179,10 @@ fn parse_entry(
     {
         return Ok(None);
     }
-    if let Some(try_exec) = entry.try_exec() {
-        if !executable_available(try_exec, options.path.as_deref()) {
-            return Ok(None);
-        }
+    if let Some(try_exec) = entry.try_exec()
+        && !executable_available(try_exec, options.path.as_deref())
+    {
+        return Ok(None);
     }
     let name = entry.name(&options.locales).ok_or("missing localized Name")?.into_owned();
     let exec = parse_exec(entry.exec().ok_or("missing Exec")?, &entry);
@@ -454,5 +454,35 @@ mod tests {
         );
         assert!(discover_with_options(&opts).applications.is_empty());
         assert_eq!(fs::metadata(&opts.data_home).unwrap().permissions().mode() & 0o777, 0o755);
+    }
+
+    struct FakeLaunchBackend {
+        launched: Vec<String>,
+    }
+
+    impl LaunchBackend for FakeLaunchBackend {
+        fn launch(&mut self, application: &ApplicationEntry) -> Result<(), LaunchError> {
+            self.launched.push(application.desktop_id.clone());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn launch_backend_is_injectable_without_spawning_a_process() {
+        let application = ApplicationEntry {
+            desktop_id: "org.demo.desktop".into(),
+            name: "Demo".into(),
+            generic_name: None,
+            keywords: Vec::new(),
+            icon: None,
+            desktop_path: PathBuf::from("/tmp/demo.desktop"),
+            exec: vec!["demo".into()],
+            actions: Vec::new(),
+            terminal: false,
+            dbus_activatable: false,
+        };
+        let mut backend = FakeLaunchBackend { launched: Vec::new() };
+        backend.launch(&application).unwrap();
+        assert_eq!(backend.launched, vec!["org.demo.desktop"]);
     }
 }

@@ -6,6 +6,7 @@ use std::{
     env,
     ffi::OsStr,
     fs, io,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus},
     sync::{Arc, Mutex},
@@ -35,6 +36,7 @@ pub struct ApplicationEntry {
     pub keywords: Vec<String>,
     pub icon: Option<IconReference>,
     pub desktop_path: PathBuf,
+    pub working_directory: Option<PathBuf>,
     pub exec: Vec<String>,
     pub actions: Vec<String>,
     pub terminal: bool,
@@ -197,8 +199,7 @@ fn parse_entry(
         return Ok(None);
     }
     let name = entry.name(&options.locales).ok_or("missing localized Name")?.into_owned();
-    let exec = parse_exec(entry.exec().ok_or("missing Exec")?, &entry);
-    let exec = exec.map_err(|error| error.to_string())?;
+    let exec = parse_exec(entry.exec().ok_or("missing Exec")?, &entry, &options.locales)?;
     let icon = entry.icon().map(|name| IconReference {
         name: name.to_owned(),
         resolved_path: resolve_icon(name, path, options),
@@ -215,6 +216,7 @@ fn parse_entry(
             .collect(),
         icon,
         desktop_path: path.to_owned(),
+        working_directory: entry.path().map(PathBuf::from),
         exec,
         actions: entry.actions().unwrap_or_default().into_iter().map(str::to_owned).collect(),
         terminal: entry.terminal(),
@@ -237,13 +239,53 @@ fn desktop_visibility_matches(entry: &DesktopEntry, desktops: &[String]) -> bool
 fn executable_available(value: &str, path: Option<&str>) -> bool {
     let candidate = Path::new(value);
     if candidate.is_absolute() || value.contains('/') {
-        return candidate.is_file();
+        return is_executable_file(candidate);
     }
     path.unwrap_or("")
         .split(':')
         .map(Path::new)
         .map(|dir| dir.join(value))
-        .any(|candidate| candidate.is_file())
+        .any(|candidate| is_executable_file(&candidate))
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    fs::metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+fn parse_exec(
+    value: &str,
+    entry: &DesktopEntry,
+    locales: &[String],
+) -> Result<Vec<String>, String> {
+    let tokens = shell_words::split(value).map_err(|error| error.to_string())?;
+    let mut args = Vec::new();
+    for token in tokens {
+        match token.as_str() {
+            "%i" => {
+                if let Some(icon) = entry.icon() {
+                    args.extend(["--icon".to_owned(), icon.to_owned()]);
+                }
+            }
+            "%%" => args.push("%".to_owned()),
+            "%c" => {
+                if let Some(name) = entry.name::<String>(locales) {
+                    args.push(name.into_owned());
+                }
+            }
+            "%k" => args.push(entry.path.to_string_lossy().into_owned()),
+            "%f" | "%F" | "%u" | "%U" | "%d" | "%D" | "%n" | "%N" | "%v" | "%m" => {}
+            field if field.starts_with('%') => {
+                return Err(format!("unknown field code {field}"));
+            }
+            argument => args.push(argument.to_owned()),
+        }
+    }
+    if args.is_empty() {
+        return Err("Exec field produced no argv".to_owned());
+    }
+    Ok(args)
 }
 
 fn resolve_icon(name: &str, desktop_path: &Path, options: &DiscoveryOptions) -> Option<PathBuf> {
@@ -265,71 +307,6 @@ fn resolve_icon(name: &str, desktop_path: &Path, options: &DiscoveryOptions) -> 
             [dir.join(name), dir.join(format!("{name}.png")), dir.join(format!("{name}.svg"))]
         })
         .find(|path| path.is_file())
-}
-
-fn parse_exec(value: &str, entry: &DesktopEntry) -> Result<Vec<String>, LaunchError> {
-    let tokens = shell_like_tokens(value)?;
-    if tokens.is_empty() {
-        return Err(LaunchError::InvalidExec("Exec field is empty".to_owned()));
-    }
-    let mut args = Vec::new();
-    for token in tokens {
-        if let Some(code) = token.strip_prefix('%') {
-            if token.len() != 2 {
-                return Err(LaunchError::InvalidExec(format!("invalid field code {token}")));
-            }
-            match code {
-                "i" => {
-                    if let Some(icon) = entry.icon() {
-                        args.push(icon.to_owned());
-                    }
-                }
-                "c" => args.push(entry.name::<String>(&[]).unwrap_or_default().into_owned()),
-                "k" => args.push(entry.path.to_string_lossy().into_owned()),
-                "f" | "F" | "u" | "U" => {}
-                _ => return Err(LaunchError::InvalidExec(format!("unknown field code {token}"))),
-            }
-        } else {
-            args.push(token);
-        }
-    }
-    if args.is_empty() {
-        return Err(LaunchError::InvalidExec("Exec field produced no argv".to_owned()));
-    }
-    Ok(args)
-}
-
-fn shell_like_tokens(value: &str) -> Result<Vec<String>, LaunchError> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    let mut quote = None;
-    let mut escaped = false;
-    for character in value.chars() {
-        if escaped {
-            current.push(character);
-            escaped = false;
-            continue;
-        }
-        match (quote, character) {
-            (Some('"'), '\\') => escaped = true,
-            (None, '\\') => escaped = true,
-            (Some(expected), character) if expected == character => quote = None,
-            (None, '\'' | '"') => quote = Some(character),
-            (None, character) if character.is_whitespace() => {
-                if !current.is_empty() {
-                    tokens.push(std::mem::take(&mut current));
-                }
-            }
-            (_, character) => current.push(character),
-        }
-    }
-    if escaped || quote.is_some() {
-        return Err(LaunchError::InvalidExec("unterminated escape or quote".to_owned()));
-    }
-    if !current.is_empty() {
-        tokens.push(current);
-    }
-    Ok(tokens)
 }
 
 pub trait LaunchBackend {
@@ -388,6 +365,9 @@ impl LaunchBackend for ProcessLaunchBackend {
             .ok_or(LaunchError::InvalidExec("Exec field is empty".to_owned()))?;
         let mut command = Command::new(program);
         command.args(args);
+        if let Some(working_directory) = &application.working_directory {
+            command.current_dir(working_directory);
+        }
         sanitize_child_environment(&mut command);
         let child = command.spawn().map_err(LaunchError::Spawn)?;
         self.children.lock().map_err(|_| LaunchError::RegistryPoisoned)?.push(child);
@@ -497,6 +477,43 @@ mod tests {
     }
 
     #[test]
+    fn exec_field_codes_and_working_directory_are_expanded() {
+        let temp = tempfile::tempdir().unwrap();
+        let opts = options(temp.path());
+        write_entry(
+            &opts.data_home,
+            "applications/codes.desktop",
+            "[Desktop Entry]\nType=Application\nName=Пример\nIcon=demo\nPath=/tmp\nExec=tool %i %% %c %k %d\n",
+        );
+        let report = discover_with_options(&opts);
+        let app = &report.applications[0];
+        assert_eq!(app.exec[0], "tool");
+        assert_eq!(&app.exec[1..4], ["--icon", "demo", "%"]);
+        assert_eq!(app.exec[4], "Пример");
+        assert_eq!(app.working_directory, Some(PathBuf::from("/tmp")));
+    }
+
+    #[test]
+    fn try_exec_requires_an_executable_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let opts = options(temp.path());
+        let bin = temp.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let candidate = bin.join("demo");
+        fs::write(&candidate, "#!/bin/sh\n").unwrap();
+        write_entry(
+            &opts.data_home,
+            "applications/try.desktop",
+            "[Desktop Entry]\nType=Application\nName=Try\nTryExec=demo\nExec=/bin/true\n",
+        );
+        let mut not_executable = opts.clone();
+        not_executable.path = Some(bin.to_string_lossy().into_owned());
+        assert!(discover_with_options(&not_executable).applications.is_empty());
+        fs::set_permissions(&candidate, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(discover_with_options(&not_executable).applications.len(), 1);
+    }
+
+    #[test]
     fn hidden_and_no_display_are_filtered() {
         let temp = tempfile::tempdir().unwrap();
         let opts = options(temp.path());
@@ -534,6 +551,7 @@ mod tests {
             keywords: Vec::new(),
             icon: None,
             desktop_path: PathBuf::from("/tmp/demo.desktop"),
+            working_directory: None,
             exec: vec!["demo".into()],
             actions: Vec::new(),
             terminal: false,

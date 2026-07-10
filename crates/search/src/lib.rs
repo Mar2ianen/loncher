@@ -140,6 +140,7 @@ mod tests {
             keywords: keywords.iter().map(|value| (*value).into()).collect(),
             icon: None,
             desktop_path: PathBuf::from(format!("/tmp/{id}.desktop")),
+            working_directory: None,
             exec: vec!["true".into()],
             actions: Vec::new(),
             terminal: false,

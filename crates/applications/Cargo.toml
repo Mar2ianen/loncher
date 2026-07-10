@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 freedesktop-desktop-entry.workspace = true
+shell-words.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

@@ -25,9 +25,9 @@ impl DaemonCommand {
             {
                 Err(CommandValidationError::EmptyQuery)
             }
-            Self::OpenAgent {
-                prompt: Some(prompt),
-            } if prompt.trim().is_empty() => Err(CommandValidationError::EmptyPrompt),
+            Self::OpenAgent { prompt: Some(prompt) } if prompt.trim().is_empty() => {
+                Err(CommandValidationError::EmptyPrompt)
+            }
             _ => Ok(()),
         }
     }
@@ -47,9 +47,7 @@ mod tests {
 
     #[test]
     fn rejects_empty_query() {
-        let command = DaemonCommand::Query {
-            text: "   ".to_owned(),
-        };
+        let command = DaemonCommand::Query { text: "   ".to_owned() };
 
         assert_eq!(command.validate(), Err(CommandValidationError::EmptyQuery));
     }

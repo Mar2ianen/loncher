@@ -1,13 +1,14 @@
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
 
 pub const SYNC_SCHEMA_VERSION: u16 = 1;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
 pub struct DeviceId(String);
 
 impl DeviceId {
@@ -22,7 +23,24 @@ impl DeviceId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+impl fmt::Display for DeviceId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for DeviceId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
 pub struct OperationId(String);
 
 impl OperationId {
@@ -37,7 +55,23 @@ impl OperationId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+impl fmt::Display for OperationId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for OperationId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct EntityKey {
     namespace: String,
     key: String,
@@ -61,6 +95,22 @@ impl EntityKey {
 
     pub fn key(&self) -> &str {
         &self.key
+    }
+}
+
+impl<'de> Deserialize<'de> for EntityKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct WireEntityKey {
+            namespace: String,
+            key: String,
+        }
+
+        let value = WireEntityKey::deserialize(deserializer)?;
+        Self::new(value.namespace, value.key).map_err(de::Error::custom)
     }
 }
 
@@ -165,8 +215,8 @@ fn validate_identifier(field: &'static str, value: &str) -> Result<(), SyncProto
 #[cfg(test)]
 mod tests {
     use super::{
-        DeviceId, EntityKey, OperationId, Revision, SYNC_SCHEMA_VERSION, SyncOperation, SyncPayload,
-        SyncProtocolError,
+        DeviceId, EntityKey, OperationId, Revision, SYNC_SCHEMA_VERSION, SyncOperation,
+        SyncPayload, SyncProtocolError,
     };
 
     fn operation(sequence: u64) -> SyncOperation {
@@ -179,10 +229,7 @@ mod tests {
             device_sequence: sequence,
             entity: EntityKey::new("settings", "theme").expect("valid fixture entity key"),
             payload: SyncPayload::Put {
-                revision: Revision {
-                    device_id,
-                    counter: sequence,
-                },
+                revision: Revision { device_id, counter: sequence },
                 ciphertext: vec![1, 2, 3],
             },
         }
@@ -190,14 +237,24 @@ mod tests {
 
     #[test]
     fn rejects_zero_sequence() {
-        assert_eq!(
-            operation(0).validate(),
-            Err(SyncProtocolError::ZeroDeviceSequence)
-        );
+        assert_eq!(operation(0).validate(), Err(SyncProtocolError::ZeroDeviceSequence));
     }
 
     #[test]
     fn accepts_current_schema() {
         assert_eq!(operation(1).validate(), Ok(()));
+    }
+
+    #[test]
+    fn rejects_invalid_device_id_during_deserialization() {
+        let error = serde_json::from_str::<DeviceId>(r#""""#).expect_err("empty ID must fail");
+        assert!(error.to_string().contains("device_id must not be empty"));
+    }
+
+    #[test]
+    fn rejects_invalid_entity_key_during_deserialization() {
+        let error = serde_json::from_str::<EntityKey>(r#"{"namespace":"settings","key":" "}"#)
+            .expect_err("empty key must fail");
+        assert!(error.to_string().contains("entity key must not be empty"));
     }
 }

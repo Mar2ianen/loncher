@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use loncher_domain::{CommandValidationError, DaemonCommand};
-use loncher_ui_contract::{UiBackend, UiCommand, UiError, UnavailableUiBackend};
+use loncher_ui_contract::{UiBackend, UiCommand, UiError, UiSnapshot, UnavailableUiBackend};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
@@ -15,7 +15,7 @@ pub enum RuntimeError {
 }
 
 pub async fn run_daemon(cancellation: CancellationToken) -> Result<(), RuntimeError> {
-    run_daemon_with_ui(cancellation, UnavailableUiBackend::default()).await
+    run_daemon_with_ui(cancellation, UnavailableUiBackend).await
 }
 
 pub async fn run_daemon_with_ui<U>(
@@ -25,12 +25,12 @@ pub async fn run_daemon_with_ui<U>(
 where
     U: UiBackend,
 {
-    debug!(snapshot = ?ui.snapshot(), "UI backend attached");
+    ui.dispatch(UiCommand::ApplySnapshot(UiSnapshot::default()))?;
     info!("daemon runtime initialized");
 
     cancellation.cancelled().await;
 
-    ui.dispatch(UiCommand::Hide)?;
+    ui.dispatch(UiCommand::ApplySnapshot(UiSnapshot::default()))?;
     ui.dispatch(UiCommand::Shutdown)?;
     info!("daemon runtime cancellation observed");
     Ok(())

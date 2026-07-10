@@ -1,9 +1,4 @@
-use std::{
-    fs,
-    os::unix::fs::PermissionsExt,
-    path::Path,
-    time::Duration,
-};
+use std::{fs, os::unix::fs::PermissionsExt, path::Path, time::Duration};
 
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
@@ -71,12 +66,7 @@ impl TestDaemon {
 
         wait_for_socket(&config.socket_path).await;
 
-        Self {
-            _temp: temp,
-            config,
-            cancellation,
-            task,
-        }
+        Self { _temp: temp, config, cancellation, task }
     }
 
     async fn shutdown(self) {
@@ -113,9 +103,7 @@ async fn show_and_status_round_trip() {
 
     let shown = dispatch_command_with_config(
         &daemon.config,
-        DaemonCommand::Show {
-            query: Some("zed".to_owned()),
-        },
+        DaemonCommand::Show { query: Some("zed".to_owned()) },
     )
     .await
     .expect("show request succeeds");
@@ -146,20 +134,12 @@ async fn headless_visible_command_returns_typed_error_without_mutation() {
 
     let error = dispatch_command_with_config(
         &daemon.config,
-        DaemonCommand::Show {
-            query: Some("zed".to_owned()),
-        },
+        DaemonCommand::Show { query: Some("zed".to_owned()) },
     )
     .await
     .expect_err("headless show must fail");
 
-    assert!(matches!(
-        error,
-        ClientError::Remote {
-            code: ProtocolErrorCode::UiUnavailable,
-            ..
-        }
-    ));
+    assert!(matches!(error, ClientError::Remote { code: ProtocolErrorCode::UiUnavailable, .. }));
 
     let status = dispatch_command_with_config(&daemon.config, DaemonCommand::Status)
         .await
@@ -184,18 +164,14 @@ async fn concurrent_clients_are_serialized_through_bounded_router() {
         clients.spawn(async move {
             dispatch_command_with_config(
                 &config,
-                DaemonCommand::Show {
-                    query: Some(format!("query-{index}")),
-                },
+                DaemonCommand::Show { query: Some(format!("query-{index}")) },
             )
             .await
         });
     }
 
     while let Some(result) = clients.join_next().await {
-        result
-            .expect("client task joins")
-            .expect("concurrent request succeeds");
+        result.expect("client task joins").expect("concurrent request succeeds");
     }
 
     let status = dispatch_command_with_config(&daemon.config, DaemonCommand::Status)
@@ -215,13 +191,10 @@ async fn concurrent_clients_are_serialized_through_bounded_router() {
 async fn second_daemon_is_rejected() {
     let daemon = TestDaemon::start_accepting().await;
 
-    let error = run_daemon_with_ui(
-        daemon.config.clone(),
-        CancellationToken::new(),
-        AcceptingUi::default(),
-    )
-    .await
-    .expect_err("second daemon must fail");
+    let error =
+        run_daemon_with_ui(daemon.config.clone(), CancellationToken::new(), AcceptingUi::default())
+            .await
+            .expect_err("second daemon must fail");
 
     assert!(matches!(error, ServerError::InstanceAlreadyRunning));
     daemon.shutdown().await;
@@ -231,8 +204,8 @@ async fn second_daemon_is_rejected() {
 async fn stale_socket_is_recovered() {
     let temp = tempfile::tempdir().expect("temporary runtime directory");
     let socket_path = temp.path().join("loncher.sock");
-    let stale = std::os::unix::net::UnixListener::bind(&socket_path)
-        .expect("create stale socket fixture");
+    let stale =
+        std::os::unix::net::UnixListener::bind(&socket_path).expect("create stale socket fixture");
     drop(stale);
     assert!(socket_path.exists());
 
@@ -253,41 +226,26 @@ async fn stale_socket_is_recovered() {
     dispatch_command_with_config(&config, DaemonCommand::Shutdown)
         .await
         .expect("shutdown request succeeds");
-    task.await
-        .expect("daemon task joins")
-        .expect("daemon exits cleanly");
+    task.await.expect("daemon task joins").expect("daemon exits cleanly");
 }
 
 #[tokio::test]
 async fn malformed_frame_returns_public_protocol_error() {
     let daemon = TestDaemon::start_accepting().await;
-    let stream = UnixStream::connect(&daemon.config.socket_path)
-        .await
-        .expect("connect raw client");
-    let codec = LengthDelimitedCodec::builder()
-        .max_frame_length(daemon.config.max_frame_size)
-        .new_codec();
+    let stream = UnixStream::connect(&daemon.config.socket_path).await.expect("connect raw client");
+    let codec =
+        LengthDelimitedCodec::builder().max_frame_length(daemon.config.max_frame_size).new_codec();
     let mut framed = tokio_util::codec::Framed::new(stream, codec);
 
-    framed
-        .send(Bytes::from_static(b"{"))
-        .await
-        .expect("send malformed JSON frame");
-    let frame = framed
-        .next()
-        .await
-        .expect("server sends reply")
-        .expect("reply frame is valid");
+    framed.send(Bytes::from_static(b"{")).await.expect("send malformed JSON frame");
+    let frame = framed.next().await.expect("server sends reply").expect("reply frame is valid");
     let reply: ReplyEnvelope = serde_json::from_slice(&frame).expect("reply is JSON");
 
     assert_eq!(reply.request_id, RequestId::UNKNOWN);
     assert!(matches!(
         reply.payload,
         ReplyPayload::Error {
-            error: loncher_domain::ProtocolError {
-                code: ProtocolErrorCode::InvalidFrame,
-                ..
-            }
+            error: loncher_domain::ProtocolError { code: ProtocolErrorCode::InvalidFrame, .. }
         }
     ));
 
@@ -297,27 +255,18 @@ async fn malformed_frame_returns_public_protocol_error() {
 #[tokio::test]
 async fn unsupported_protocol_version_returns_typed_error() {
     let daemon = TestDaemon::start_accepting().await;
-    let stream = UnixStream::connect(&daemon.config.socket_path)
-        .await
-        .expect("connect raw client");
-    let codec = LengthDelimitedCodec::builder()
-        .max_frame_length(daemon.config.max_frame_size)
-        .new_codec();
+    let stream = UnixStream::connect(&daemon.config.socket_path).await.expect("connect raw client");
+    let codec =
+        LengthDelimitedCodec::builder().max_frame_length(daemon.config.max_frame_size).new_codec();
     let mut framed = tokio_util::codec::Framed::new(stream, codec);
     let mut request = RequestEnvelope::new(RequestId::new(41), DaemonCommand::Status);
     request.protocol_version = DAEMON_PROTOCOL_VERSION + 1;
 
     framed
-        .send(Bytes::from(
-            serde_json::to_vec(&request).expect("serialize request"),
-        ))
+        .send(Bytes::from(serde_json::to_vec(&request).expect("serialize request")))
         .await
         .expect("send request");
-    let frame = framed
-        .next()
-        .await
-        .expect("server sends reply")
-        .expect("reply frame is valid");
+    let frame = framed.next().await.expect("server sends reply").expect("reply frame is valid");
     let reply: ReplyEnvelope = serde_json::from_slice(&frame).expect("reply is JSON");
 
     assert!(matches!(
@@ -336,25 +285,11 @@ async fn unsupported_protocol_version_returns_typed_error() {
 #[tokio::test]
 async fn socket_permissions_and_external_cleanup_are_enforced() {
     let daemon = TestDaemon::start_accepting().await;
-    let parent = daemon
-        .config
-        .socket_path
-        .parent()
-        .expect("socket has parent");
+    let parent = daemon.config.socket_path.parent().expect("socket has parent");
 
+    assert_eq!(fs::metadata(parent).expect("parent metadata").permissions().mode() & 0o777, 0o700);
     assert_eq!(
-        fs::metadata(parent)
-            .expect("parent metadata")
-            .permissions()
-            .mode()
-            & 0o777,
-        0o700
-    );
-    assert_eq!(
-        fs::metadata(&daemon.config.socket_path)
-            .expect("socket metadata")
-            .permissions()
-            .mode()
+        fs::metadata(&daemon.config.socket_path).expect("socket metadata").permissions().mode()
             & 0o777,
         0o600
     );

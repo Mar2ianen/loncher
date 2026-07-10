@@ -319,7 +319,7 @@ where
 {
     let mut state = DaemonState::default();
     let search = SearchService::new(applications, 12);
-    let mut launch_backend = ProcessLaunchBackend;
+    let mut launch_backend = ProcessLaunchBackend::default();
     let mut ui_events = ui.take_event_receiver();
     ui.dispatch(UiCommand::ApplySnapshot(to_ui_snapshot(&state.snapshot(), &search)))?;
 
@@ -343,6 +343,9 @@ where
                 }
             }
             _ = tokio::time::sleep(std::time::Duration::from_millis(10)), if ui_events.is_some() => {
+                if let Err(error) = launch_backend.reap_finished() {
+                    warn!(%error, "failed to reap launched application");
+                }
                 if let Some(receiver) = ui_events.as_ref() {
                     match receiver.try_recv() {
                         Ok(event) => handle_ui_event(event, &mut state, &mut ui, &search, &mut launch_backend),
@@ -354,6 +357,9 @@ where
         }
     }
 
+    if let Err(error) = launch_backend.shutdown() {
+        warn!(%error, "failed to reap launched applications during shutdown");
+    }
     ui.dispatch(UiCommand::ApplySnapshot(UiSnapshot::default()))?;
     ui.dispatch(UiCommand::Shutdown)?;
     Ok(())

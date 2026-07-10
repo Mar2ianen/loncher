@@ -7,13 +7,25 @@ use std::{
     ffi::OsStr,
     fs, io,
     path::{Path, PathBuf},
-    process::{Command, ExitStatus},
+    process::{Child, Command, ExitStatus},
+    sync::{Arc, Mutex},
 };
 
 use freedesktop_desktop_entry::DesktopEntry;
 use thiserror::Error;
 
 const DEFAULT_DATA_DIRS: &str = "/usr/local/share:/usr/share";
+const SENSITIVE_ENV_VARS: &[&str] = &[
+    "OPENAI_API_KEY",
+    "OPENAI_API_BASE",
+    "OPENAI_ORG_ID",
+    "GROQ_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "CEREBRAS_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GITHUB_TOKEN",
+    "MCP_AUTH_TOKEN",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplicationEntry {
@@ -324,8 +336,43 @@ pub trait LaunchBackend {
     fn launch(&mut self, application: &ApplicationEntry) -> Result<(), LaunchError>;
 }
 
-#[derive(Debug, Default)]
-pub struct ProcessLaunchBackend;
+#[derive(Debug, Clone, Default)]
+pub struct ProcessLaunchBackend {
+    children: Arc<Mutex<Vec<Child>>>,
+}
+
+impl ProcessLaunchBackend {
+    pub fn reap_finished(&self) -> Result<(), LaunchError> {
+        let mut children = self.children.lock().map_err(|_| LaunchError::RegistryPoisoned)?;
+        let mut remaining = Vec::with_capacity(children.len());
+        for mut child in children.drain(..) {
+            match child.try_wait() {
+                Ok(Some(_status)) => {}
+                Ok(None) => remaining.push(child),
+                Err(error) => return Err(LaunchError::Wait(error)),
+            }
+        }
+        *children = remaining;
+        Ok(())
+    }
+
+    pub fn shutdown(&self) -> Result<(), LaunchError> {
+        let mut children = self.children.lock().map_err(|_| LaunchError::RegistryPoisoned)?;
+        for mut child in children.drain(..) {
+            if child.try_wait().map_err(LaunchError::Wait)?.is_none() {
+                let _ = child.kill();
+                child.wait().map_err(LaunchError::Wait)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn sanitize_child_environment(command: &mut Command) {
+    for variable in SENSITIVE_ENV_VARS {
+        command.env_remove(variable);
+    }
+}
 
 impl LaunchBackend for ProcessLaunchBackend {
     fn launch(&mut self, application: &ApplicationEntry) -> Result<(), LaunchError> {
@@ -341,10 +388,10 @@ impl LaunchBackend for ProcessLaunchBackend {
             .ok_or(LaunchError::InvalidExec("Exec field is empty".to_owned()))?;
         let mut command = Command::new(program);
         command.args(args);
-        if let Some(parent) = application.desktop_path.parent() {
-            command.current_dir(parent);
-        }
-        command.spawn().map(|_| ()).map_err(LaunchError::Spawn)
+        sanitize_child_environment(&mut command);
+        let child = command.spawn().map_err(LaunchError::Spawn)?;
+        self.children.lock().map_err(|_| LaunchError::RegistryPoisoned)?.push(child);
+        self.reap_finished()
     }
 }
 
@@ -358,6 +405,10 @@ pub enum LaunchError {
     UnsupportedDbusActivation,
     #[error("failed to spawn application: {0}")]
     Spawn(#[source] io::Error),
+    #[error("failed to wait for application: {0}")]
+    Wait(#[source] io::Error),
+    #[error("launch process registry is unavailable")]
+    RegistryPoisoned,
     #[error("application exited unsuccessfully: {0}")]
     Exit(ExitStatus),
 }
@@ -381,6 +432,13 @@ mod tests {
         let path = root.join(relative);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn known_secret_environment_variables_are_removed_from_children() {
+        assert!(SENSITIVE_ENV_VARS.contains(&"OPENAI_API_KEY"));
+        assert!(SENSITIVE_ENV_VARS.contains(&"GROQ_API_KEY"));
+        assert!(!SENSITIVE_ENV_VARS.contains(&"PATH"));
     }
 
     #[test]

@@ -4,19 +4,22 @@
 
 После завершения Phase 0 один процесс `loncher daemon` постоянно живёт в пользовательской сессии. Повторный вызов того же binary работает как CLI-клиент, подключается к Unix socket, отправляет команду и завершается.
 
-Полноценный Iced UI, search index, Niri integration, MCP и AI в эту фазу не входят.
+Полноценный Iced UI, search index, Niri integration, MCP и AI в эту фазу не входят. GUI существует только как `UiBackend` contract; default/headless build не линкует GUI framework.
 
 ## Acceptance criteria
 
 1. `loncher daemon` создаёт единственный daemon instance.
 2. `loncher show`, `hide`, `toggle`, `query <text>` и `agent <prompt>` подключаются к нему через Unix socket.
-3. Второй `loncher daemon` не создаёт второй daemon и возвращает понятную ошибку/статус.
-4. `Ctrl+C` и `systemctl --user stop loncher` корректно завершают listener и удаляют socket.
-5. После kill/crash stale socket безопасно восстанавливается при следующем запуске.
+3. Второй daemon не создаёт второй instance.
+4. `Ctrl+C` и `systemctl --user stop loncher` корректно завершают tasks и удаляют socket.
+5. Stale socket безопасно восстанавливается.
 6. Socket недоступен другим пользователям.
-7. Protocol errors не валят daemon и возвращают typed error reply.
-8. Все queues bounded; все spawned tasks принадлежат runtime и завершаются через cancellation.
-9. `cargo fmt`, `clippy -D warnings` и tests проходят.
+7. Protocol errors возвращают typed reply и не валят daemon.
+8. Все queues bounded; spawned tasks принадлежат runtime и завершаются через cancellation.
+9. Runtime зависит от `ui-contract`, но не от Iced/Wayland.
+10. `cargo build -p loncher --no-default-features` проходит.
+11. `show/toggle` в headless build возвращают typed `UiUnavailable`, а не silent success.
+12. fmt, clippy и tests проходят во всей feature matrix.
 
 ## Process model
 
@@ -26,15 +29,40 @@ systemd --user
           ├── Unix socket listener
           ├── command router
           ├── daemon state
-          ├── service registry (пока пустой)
-          └── optional UI handle (stub)
+          ├── service registry
+          └── UiBackend
+                ├── UnavailableUiBackend
+                └── future IcedUiBackend
 
 Niri hotkey / shell
     └── loncher toggle
           └── connect → request → reply → exit
 ```
 
-Не держать отдельный tray process, IPC helper или agent daemon.
+Не держать отдельный tray process, IPC helper, GUI daemon или agent daemon.
+
+## GUI boundary
+
+`ui-contract` содержит только:
+
+- `UiCommand`;
+- `UiSnapshot`;
+- `UiMode`;
+- `UiVisibility`;
+- `UiBackend`;
+- typed UI errors/replies.
+
+В contract запрещены типы `iced`, Wayland, layer-shell и renderer-specific state.
+
+```text
+runtime/services
+      ↓ UiCommand + UiSnapshot
+ui-contract
+      ↓
+ui-iced (future optional leaf crate)
+```
+
+Headless backend принимает logical snapshots и shutdown/hide, но явно отклоняет команды, которым нужна видимая surface.
 
 ## CLI contract
 
@@ -48,34 +76,31 @@ loncher agent <prompt>
 loncher status
 ```
 
-На этой фазе `query` и `agent` только передают намерение в daemon state/UI stub. Они нужны, чтобы protocol не пришлось ломать на следующей фазе.
+На этой фазе `query` и `agent` только передают намерение в daemon state/UI contract.
 
 ## IPC path
-
-Default:
 
 ```text
 $XDG_RUNTIME_DIR/loncher/loncher.sock
 ```
 
-Fallback при отсутствии `XDG_RUNTIME_DIR` не придумывать молча. Daemon должен вернуть понятную ошибку с инструкцией. Для ручной разработки допустим явный `LONCHER_SOCKET`.
+При отсутствии `XDG_RUNTIME_DIR` не придумывать fallback молча. Для разработки разрешён явный `LONCHER_SOCKET`.
 
 Требования:
 
 - parent directory mode `0700`;
-- socket доступен только владельцу;
+- socket только владельцу;
 - symlink path запрещён;
-- перед удалением stale socket выполнить connect probe;
-- active socket никогда не удалять;
-- temporary bind/rename применять только если это реально поддерживается выбранной схемой Unix socket.
+- stale socket удаляется лишь после connect probe;
+- active socket никогда не удаляется.
 
 ## Protocol
 
 Transport: Unix stream socket.
 
-Framing: length-delimited frames через `tokio_util::codec::LengthDelimitedCodec`.
+Framing: `tokio_util::codec::LengthDelimitedCodec`.
 
-Payload: versioned JSON на первом этапе. Inspectability сейчас полезнее бинарного protocol; transport framing позволяет позднее заменить encoding без изменения socket semantics.
+Payload: versioned JSON на первом этапе.
 
 ```rust
 struct RequestEnvelope {
@@ -105,8 +130,6 @@ enum DaemonCommand {
 }
 ```
 
-`Shutdown` не публиковать обычному UI без отдельной CLI-команды и проверки локального пользователя.
-
 ## Daemon state
 
 ```rust
@@ -116,62 +139,49 @@ struct DaemonState {
     active_mode: LauncherMode,
     generation: u64,
 }
-
-enum UiVisibility {
-    Hidden,
-    Showing,
-    Visible,
-    Hiding,
-}
-
-enum LauncherMode {
-    Launcher,
-    Terminal,
-    Agent,
-}
 ```
 
-Даже пока UI stub, state transitions должны быть отдельной чистой функцией с unit tests.
+State transitions — чистая функция с unit tests.
 
 Инварианты:
 
 - `Hide` идемпотентен;
 - `Show` идемпотентен и может обновить query;
-- `Toggle` определяется текущим logical state, а не наличием Wayland object;
-- generation увеличивается при observable state change;
-- invalid empty query/prompt отклоняется до изменения state.
+- `Toggle` определяется logical state, не наличием Wayland object;
+- generation растёт при observable change;
+- invalid empty query/prompt отклоняется до mutation.
 
 ## Runtime structure
 
 ```text
 main
-├── load environment/config
+├── load config
 ├── init tracing
 ├── parse CLI
 ├── daemon path
 │   ├── acquire instance ownership
 │   ├── create cancellation token
 │   ├── bind socket
-│   ├── start listener task
-│   ├── start command router task
+│   ├── construct services and UiBackend
+│   ├── start listener/router
 │   ├── wait for signal/fatal error
-│   └── cancel → join tasks → remove socket
+│   └── cancel → join → cleanup
 └── client path
     ├── connect with timeout
     ├── send one request
     ├── receive one reply
-    └── exit with mapped status code
+    └── exit with mapped status
 ```
 
-Рекомендуемые primitives:
+Primitives:
 
-- bounded `mpsc` для command router;
-- `oneshot` для reply конкретному IPC request;
-- `watch` для daemon snapshot будущим subscribers;
-- `CancellationToken` как корневой shutdown signal;
-- `JoinSet` или явный task registry для owned tasks.
+- bounded `mpsc` для router;
+- `oneshot` для request reply;
+- `watch` для daemon snapshots;
+- `CancellationToken`;
+- `JoinSet` или явный task registry.
 
-Не использовать detached `tokio::spawn`.
+Detached tasks запрещены.
 
 ## Error model
 
@@ -185,6 +195,7 @@ enum DaemonError {
     Bind,
     Permission,
     Protocol,
+    Ui,
     Io,
     Task,
 }
@@ -194,11 +205,12 @@ enum ProtocolError {
     InvalidFrame,
     InvalidCommand,
     RequestTooLarge,
+    UiUnavailable,
     Internal,
 }
 ```
 
-Internal details логируются с request ID, клиент получает стабильный public code без secrets/path leakage.
+Внутренние детали логируются с request ID; клиент получает стабильный public code без secrets/path leakage.
 
 ## Tracing
 
@@ -214,19 +226,18 @@ total_ms
 result_code
 ```
 
-Не логировать query/prompt body по умолчанию. Разрешить opt-in debug body logging только отдельным development flag с явным предупреждением.
+Query/prompt body по умолчанию не логируется.
 
 ## Config
 
 На Phase 0:
 
-```text
-socket path override
-request timeout
-max frame size
-command queue capacity
-log filter
-```
+- socket path override;
+- request timeout;
+- max frame size;
+- command queue capacity;
+- log filter;
+- runtime role placeholder.
 
 Приоритет:
 
@@ -236,99 +247,90 @@ CLI > environment > XDG config > defaults
 
 Secrets отсутствуют в XDG config schema. `.env` используется только локально и игнорируется Git.
 
-## systemd user unit
+## Build matrix
 
-Unit хранится в `packaging/systemd/loncher.service`.
+```bash
+cargo check -p loncher --no-default-features
+cargo check -p loncher --no-default-features --features sync-client
+cargo check -p loncher --no-default-features --features sync-server
+cargo check -p loncher --no-default-features --features desktop
+cargo check -p loncher --all-features
+```
 
-Требования:
-
-- `Type=simple`;
-- `Restart=on-failure`;
-- разумный restart delay;
-- остановка через SIGTERM;
-- без shell wrapper;
-- environment overrides через `%h/.config/loncher/environment`, если файл существует;
-- unit не должен зависеть от graphical target сильнее необходимого до появления Wayland UI.
+Отсутствие `gui` — headless. Не вводить отрицательный feature `headless`.
 
 ## Предлагаемая разбивка commits
 
 ### 0.1 Domain protocol
 
-- Request/reply envelopes.
-- Command validation.
-- Pure state reducer.
-- Unit tests.
+- request/reply envelopes;
+- command validation;
+- pure state reducer;
+- unit tests.
 
 ### 0.2 Paths and instance ownership
 
-- XDG runtime path.
-- Secure directory/socket checks.
-- Stale socket probe.
-- Integration tests с temporary directory.
+- XDG runtime path;
+- secure directory/socket checks;
+- stale socket probe;
+- integration tests.
 
 ### 0.3 Server/client transport
 
-- Length-delimited codec.
-- Listener accept loop.
-- One-request client.
-- Frame/version/error tests.
+- length-delimited codec;
+- listener loop;
+- one-request client;
+- frame/version/error tests.
 
 ### 0.4 Runtime lifecycle
 
-- Command router.
-- Cancellation tree.
-- Task ownership/join.
-- Signals and cleanup.
+- command router;
+- cancellation tree;
+- task ownership/join;
+- signals and cleanup;
+- UiBackend wiring.
 
 ### 0.5 systemd and smoke tests
 
-- User unit.
-- CLI exit codes.
-- End-to-end daemon/client test.
-- Documentation update.
+- user unit;
+- CLI exit codes;
+- end-to-end daemon/client test;
+- headless feature matrix;
+- documentation update.
 
 ## Tests
 
 ### Unit
 
 - command validation;
-- reducer transitions and idempotency;
-- protocol version check;
+- reducer transitions;
+- protocol version;
 - path validation;
+- UI unavailable mapping;
 - public error mapping.
 
 ### Integration
 
-- start daemon on temporary socket;
-- send `Show`, verify state/reply;
+- daemon on temporary socket;
+- `Show` and state reply;
+- headless `Show` error;
 - concurrent clients;
 - malformed/oversized frame;
 - second daemon rejected;
 - stale socket recovered;
 - shutdown removes socket;
-- queue saturation has deterministic behavior.
-
-### Smoke
-
-```bash
-cargo run -p loncher -- daemon &
-DAEMON_PID=$!
-cargo run -p loncher -- status
-cargo run -p loncher -- toggle
-cargo run -p loncher -- query zed
-kill -TERM "$DAEMON_PID"
-wait "$DAEMON_PID"
-```
+- queue saturation deterministic.
 
 ## Out of scope
 
-- Iced rendering and layer-shell.
-- `.desktop` parsing/search.
-- Niri IPC.
-- SQLite.
-- Terminal/PTY.
-- MCP/provider APIs.
-- Agent memory.
-- Dictation.
+- Iced rendering and layer-shell;
+- `.desktop` parsing/search;
+- Niri IPC;
+- SQLite;
+- terminal/PTY;
+- persistent sync transport/storage;
+- MCP/provider APIs;
+- agent memory;
+- dictation.
 
-Не добавлять stubs этих подсистем глубже, чем требуется для стабильных domain contracts.
+Не добавлять stubs глубже, чем требуется для стабильных contracts и feature graph.

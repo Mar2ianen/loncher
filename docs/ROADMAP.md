@@ -11,12 +11,32 @@
 ```text
 daemon owns state
 services own capabilities
+GUI is an optional frontend adapter
+sync is a first-class service
 MCP exposes capabilities to the agent
 agent owns sessions and memory
 UI owns no durable state
 ```
 
-UI напрямую использует typed Rust services. Agent использует MCP adapters над теми же services. Это один binary и одна реализация каждого capability.
+UI напрямую использует typed Rust services. Agent использует MCP adapters над теми же services. Sync имеет собственный operation protocol и transport. Это один binary и одна реализация каждого capability.
+
+---
+
+## Foundation — build graph, GUI boundary и sync skeleton
+
+Эти границы фиксируются до полноценного GUI:
+
+- [x] `ui-contract` без зависимости от Iced/Wayland.
+- [x] headless `UnavailableUiBackend`, который явно отклоняет `show/toggle`.
+- [x] core build без feature `gui`.
+- [x] `sync-protocol` с versioned operations, IDs и per-device cursor.
+- [x] `sync-engine` с in-memory idempotency bootstrap.
+- [x] feature skeleton: `gui`, `sync-client`, `sync-server`, `desktop`, `full`.
+- [ ] CI проверяет headless, sync-client, sync-server, desktop и all-features.
+- [ ] Реальный Iced frontend живёт отдельным leaf crate.
+- [ ] Persistent sync storage/transport добавляются только после launcher MVP.
+
+Подробности sync: [`SYNC.md`](SYNC.md).
 
 ---
 
@@ -32,23 +52,24 @@ UI напрямую использует typed Rust services. Agent исполь
 - [ ] Cancellation tree, graceful shutdown, bounded queues.
 - [ ] Config из XDG + environment; secrets не хранятся в config.
 - [ ] `tracing`, latency spans и redaction policy.
-- [ ] UI lifecycle contract без реализации полноценного GUI.
+- [ ] UI lifecycle работает через `UiBackend`, а не конкретный GUI.
+- [ ] Headless build возвращает typed `UiUnavailable`, не silent no-op.
 
-**Готово:** второй запуск отправляет команду существующему daemon, а не создаёт второй экземпляр.
+**Готово:** второй запуск отправляет команду существующему daemon, а не создаёт второй экземпляр; core собирается без GUI.
 
 ---
 
 ## Phase 1 — launcher MVP
 
-- [ ] `iced` + layer-shell surface на focused output Niri.
-- [ ] Surface создаётся/map-ится по запросу и скрывается по `Esc`/повторному hotkey.
-- [ ] Парсинг `.desktop`: `Name`, `GenericName`, `Keywords`, `Exec`, `Icon`, actions, `NoDisplay`.
-- [ ] Freedesktop icon lookup и fallback.
-- [ ] `nucleo` fuzzy search.
-- [ ] Case folding, RU↔EN layout correction, typo/translit candidates и aliases.
-- [ ] Ranking: exact/prefix, frequency, recency, explicit alias, context.
-- [ ] Apps grid и плотная двухколоночная выдача.
-- [ ] `Tab` autocomplete, arrows selection, `Enter` launch.
+- [ ] отдельный `ui-iced` crate с layer-shell surface на focused output Niri;
+- [ ] surface создаётся/map-ится по запросу и скрывается по `Esc`/повторному hotkey;
+- [ ] парсинг `.desktop`: `Name`, `GenericName`, `Keywords`, `Exec`, `Icon`, actions, `NoDisplay`;
+- [ ] Freedesktop icon lookup и fallback;
+- [ ] `nucleo` fuzzy search;
+- [ ] case folding, RU↔EN layout correction, typo/translit candidates и aliases;
+- [ ] ranking: exact/prefix, frequency, recency, explicit alias, context;
+- [ ] apps grid и плотная двухколоночная выдача;
+- [ ] `Tab` autocomplete, arrows selection, `Enter` launch;
 - [ ] SQLite history: query, result, launches, recency.
 
 **Готово:** launcher ежедневно пригоден без файлов, system controls и AI.
@@ -57,54 +78,54 @@ UI напрямую использует typed Rust services. Agent исполь
 
 ## Phase 2 — Niri-native shell
 
-- [ ] Пинованная версия `niri-ipc` за собственным adapter trait.
-- [ ] Непрерывный Niri event stream и локальный snapshot workspaces/windows/outputs.
-- [ ] Workspaces в status bar: focus, occupancy, dominant app icon.
-- [ ] Клик/scroll/context menu для workspace actions.
-- [ ] Поиск открытых окон и focus window.
-- [ ] Move focused window/result to workspace.
-- [ ] Launcher открывается на focused output.
+- [ ] пинованная версия `niri-ipc` за собственным adapter trait;
+- [ ] непрерывный Niri event stream и локальный snapshot workspaces/windows/outputs;
+- [ ] workspaces в status bar: focus, occupancy, dominant app icon;
+- [ ] click/scroll/context menu для workspace actions;
+- [ ] поиск открытых окон и focus window;
+- [ ] move focused window/result to workspace;
+- [ ] launcher открывается на focused output.
 
-Status bar также резервирует компактные метрики:
+Status bar резервирует компактные метрики:
 
-- [ ] страна и публичный IP с флагом;
-- [ ] latency;
-- [ ] CPU, GPU, VRAM, RAM;
-- [ ] RX/TX;
-- [ ] battery/power;
-- [ ] keyboard layout и time.
+- страна и публичный IP с флагом;
+- latency;
+- CPU, GPU, VRAM, RAM;
+- RX/TX;
+- battery/power;
+- keyboard layout и time.
 
-Не дублировать там Wi-Fi/Bluetooth/display/sound control tiles.
+Wi-Fi/Bluetooth/display/sound здесь не дублируются.
 
 ---
 
 ## Phase 3 — files, clipboard и preview
 
-- [ ] Индекс разрешённых директорий через `ignore`.
-- [ ] Live updates через `notify`.
-- [ ] MIME/type/metadata extraction.
-- [ ] File/folder results в общей двухколоночной выдаче.
-- [ ] Media thumbnail вместо generic icon.
-- [ ] Image preview: dimensions, format, size.
-- [ ] Video preview: frame, duration, resolution, size.
-- [ ] PDF first page, text/code, audio metadata.
-- [ ] `Space` открывает широкий Quick Look-like preview.
-- [ ] Preview jobs cancellable; memory/disk cache.
-- [ ] Context menus по ПКМ: open, reveal, copy path, open with, pin, alias.
-- [ ] Wayland clipboard history: text, URL, code, image, files.
-- [ ] Dedup, size limits, sensitive-source policy.
+- [ ] индекс разрешённых директорий через `ignore`;
+- [ ] live updates через `notify`;
+- [ ] MIME/type/metadata extraction;
+- [ ] file/folder results в общей двухколоночной выдаче;
+- [ ] media thumbnail вместо generic icon;
+- [ ] image preview: dimensions, format, size;
+- [ ] video preview: frame, duration, resolution, size;
+- [ ] PDF first page, text/code, audio metadata;
+- [ ] `Space` открывает широкий Quick Look-like preview;
+- [ ] preview jobs cancellable; memory/disk cache;
+- [ ] context menus по ПКМ: open, reveal, copy path, open with, pin, alias;
+- [ ] Wayland clipboard history;
+- [ ] dedup, size limits, sensitive-source policy.
 
 ---
 
 ## Phase 4 — terminal
 
-- [ ] `!` переключает input в terminal command mode.
-- [ ] Adapter над `alacritty_terminal`; его типы не выходят за границу adapter-а.
-- [ ] PTY sessions, resize, scrollback, selection, copy.
-- [ ] Iced renderer для terminal grid.
-- [ ] Command history, aliases, cwd/project context.
-- [ ] One-shot commands и persistent sessions используют один backend.
-- [ ] Timeout/output limits и явная destructive policy.
+- [ ] `!` переключает input в terminal command mode;
+- [ ] adapter над `alacritty_terminal`; его типы не выходят за границу crate;
+- [ ] PTY sessions, resize, scrollback, selection, copy;
+- [ ] Iced renderer для terminal grid;
+- [ ] command history, aliases, cwd/project context;
+- [ ] one-shot commands и persistent sessions используют один backend;
+- [ ] timeout/output limits и явная destructive policy.
 
 ---
 
@@ -114,107 +135,124 @@ Status bar также резервирует компактные метрики
 
 Компактный cluster `2×2` в едином стиле с agent tools:
 
-- [ ] Wi-Fi status/entry tile;
-- [ ] Bluetooth device/status tile;
-- [ ] display/brightness tile;
-- [ ] sound/output/volume tile.
+- Wi-Fi status/entry tile;
+- Bluetooth device/status tile;
+- display/brightness tile;
+- sound/output/volume tile.
 
 Это entry points, а не огромные phone toggles. Клик открывает подробный модуль. Состояние читается по иконке, уровню и цвету; текста минимум.
 
 Backends:
 
-- [ ] NetworkManager через `zbus`.
-- [ ] BlueZ через `bluer`.
-- [ ] PipeWire/WirePlumber adapter.
-- [ ] display/backlight adapter.
-- [ ] MPRIS player.
-- [ ] notifications.
-- [ ] system metrics и AMD sysfs GPU metrics.
+- [ ] NetworkManager через `zbus`;
+- [ ] BlueZ через `bluer`;
+- [ ] PipeWire/WirePlumber adapter;
+- [ ] display/backlight adapter;
+- [ ] MPRIS player;
+- [ ] notifications;
+- [ ] system metrics и AMD sysfs GPU metrics;
 - [ ] public IP + local GeoIP cache.
 
-Нижняя строка обычного режима:
+Нижняя строка:
 
-- [ ] MPRIS player;
-- [ ] progress/playback controls;
-- [ ] compact calendar/agenda;
-- [ ] weather;
-- [ ] dictation button.
+- MPRIS player;
+- compact calendar/agenda;
+- weather;
+- dictation button.
 
 ---
 
-## Phase 6 — MCP foundation
+## Phase 6 — sync production implementation
+
+Contracts уже существуют, но реальная репликация не должна блокировать MVP.
+
+- [ ] persistent append-only changelog;
+- [ ] materialized local state;
+- [ ] logical root mapping;
+- [ ] HTTP transport;
+- [ ] device identities и pairing;
+- [ ] application-level encryption;
+- [ ] per-scope permissions;
+- [ ] conflict UI;
+- [ ] sync hub headless role;
+- [ ] optional iroh transport later.
+
+---
+
+## Phase 7 — MCP foundation
 
 MCP — единая agent-facing граница, даже для встроенных capabilities.
 
-- [ ] `rmcp` host/client/server foundation.
-- [ ] Builtin MCP server adapters: filesystem, console, clipboard, Niri, network, Bluetooth, display, audio, processes, metrics.
-- [ ] External MCP registry: stdio и Streamable HTTP.
-- [ ] EXA Search, GitHub, browser/web, DB/PostgreSQL, docs/RAG, calendar.
-- [ ] Reconnect/backoff, health, cancellation, output truncation.
-- [ ] Progressive tool discovery вместо загрузки всех schemas.
-- [ ] Единый policy engine и audit trail.
-- [ ] Access modes: Read-only, Ask, Full access.
-- [ ] Tool palette: компактные иконки, цветные состояния, click toggle, context menu для docs/permissions/config/reconnect.
+- [ ] `rmcp` host/client/server foundation;
+- [ ] builtin adapters: filesystem, console, clipboard, Niri, network, Bluetooth, display, audio, processes, metrics, sync;
+- [ ] external registry: stdio и Streamable HTTP;
+- [ ] EXA Search, GitHub, browser/web, DB/PostgreSQL, docs/RAG, calendar;
+- [ ] reconnect/backoff, health, cancellation, output truncation;
+- [ ] progressive tool discovery;
+- [ ] единый policy engine и audit trail;
+- [ ] access modes: Read-only, Ask, Full access;
+- [ ] compact icon tool palette; docs/permissions/config/reconnect по ПКМ.
 
 ---
 
-## Phase 7 — Hermes-like agent
+## Phase 8 — Hermes-like agent
 
 ### Provider layer
 
-- [ ] OpenAI-compatible transport.
-- [ ] Cerebras как основной быстрый provider с большим free tier.
-- [ ] Конкретные модели получаются динамически и не подменяются именем provider-а.
-- [ ] OpenAI, OpenRouter, Groq и local endpoint как дополнительные backends.
-- [ ] Streaming, retries, fallback и фактические TTFT/tokens-per-second metrics.
+- [ ] OpenAI-compatible transport;
+- [ ] Cerebras как основной быстрый provider с большим free tier;
+- [ ] конкретные модели получаются динамически;
+- [ ] OpenAI, OpenRouter, Groq и local endpoint;
+- [ ] streaming, retries, fallback и фактические TTFT/tokens-per-second metrics.
 
 ### Agent loop
 
-- [ ] Sessions, messages, plans, tool calls, approvals, cancellation.
-- [ ] Parallel safe calls.
-- [ ] Context budget и tool-result compression.
-- [ ] После первого `@` prompt верхний input становится session header, нижняя строка — composer.
-- [ ] Composer: access mode, provider/model, active tools, input, mic, send/stop.
-- [ ] History — скрытый browser-like drawer, не постоянная колонка.
+- [ ] sessions, messages, plans, tool calls, approvals, cancellation;
+- [ ] parallel safe calls;
+- [ ] context budget и tool-result compression;
+- [ ] после первого `@` prompt верхний input становится session header, нижняя строка — composer;
+- [ ] composer: access mode, provider/model, active tools, input, mic, send/stop;
+- [ ] history — скрытый browser-like drawer.
 
 ### Memory
 
-- [ ] Working memory: текущий plan, context, pending calls.
-- [ ] Episodic memory: задачи, действия, ошибки, результат, corrections.
-- [ ] Semantic memory: устойчивые facts/preferences с provenance/scope/confidence/TTL.
-- [ ] Procedural memory: reusable skills и success checks.
-- [ ] Раздельные global user, project-local, machine-local и temporary scopes.
-- [ ] SQLite + FTS5-first retrieval.
-- [ ] Compact summaries вместо сырых старых диалогов.
-- [ ] Memory write policy и approval для устойчивых пользовательских фактов.
-- [ ] Background consolidation после появления измеримой пользы.
+- [ ] working memory;
+- [ ] episodic memory;
+- [ ] semantic facts/preferences с provenance/scope/confidence/TTL;
+- [ ] procedural skills и success checks;
+- [ ] global user, project-local, machine-local и temporary scopes;
+- [ ] SQLite + FTS5-first retrieval;
+- [ ] compact summaries;
+- [ ] memory write policy и approval;
+- [ ] background consolidation только после измеримой пользы.
 
 ---
 
-## Phase 8 — dictation
+## Phase 9 — dictation
 
-- [ ] `cpal` capture и push-to-talk.
-- [ ] VAD и mic device selection.
-- [ ] Groq STT backend.
-- [ ] Local Whisper backend.
-- [ ] Policies: Groq-first, Local-only, Hedged.
-- [ ] В Hedged режиме local стартует сразу, Groq уточняет финальный segment.
-- [ ] Не заменять текст после ручной правки.
-- [ ] Privacy mode запрещает network STT.
-- [ ] Transcript вставляется в input и не отправляется автоматически.
+- [ ] `cpal` capture и push-to-talk;
+- [ ] VAD и mic device selection;
+- [ ] Groq STT backend;
+- [ ] local Whisper backend;
+- [ ] Groq-first, Local-only, Hedged;
+- [ ] local стартует сразу, Groq уточняет финальный segment;
+- [ ] не заменять текст после ручной правки;
+- [ ] privacy mode запрещает network STT;
+- [ ] transcript вставляется в input и не отправляется автоматически.
 
 ---
 
-## Phase 9 — hardening
+## Phase 10 — hardening
 
-- [ ] Cold/open/search/preview latency budgets и p50/p95 measurements.
-- [ ] Memory/cache limits и eviction.
-- [ ] Fake platform backends для integration tests.
-- [ ] Corrupted media, malformed `.desktop`, hung MCP, broken provider streams.
-- [ ] SQLite migration tests.
-- [ ] Filesystem scope/symlink tests.
-- [ ] Secret scrubbing и clipboard privacy tests.
-- [ ] Full audit trail для mutating agent actions.
+- [ ] cold/open/search/preview latency budgets и p50/p95;
+- [ ] memory/cache limits и eviction;
+- [ ] fake platform backends;
+- [ ] corrupted media, malformed `.desktop`, hung MCP, broken streams;
+- [ ] SQLite migration tests;
+- [ ] filesystem scope/symlink tests;
+- [ ] secret scrubbing и clipboard privacy tests;
+- [ ] full audit trail для mutating agent actions;
+- [ ] CI feature matrix остаётся зелёной.
 
 ---
 
@@ -227,7 +265,7 @@ MCP — единая agent-facing граница, даже для встроен
 - interruption/barge-in;
 - streaming TTS;
 - короткий voice overlay;
-- тот же AgentHost, MCP и memory, без второго агента.
+- тот же AgentHost, MCP и memory.
 
 ### WebView/artifacts
 
@@ -235,20 +273,12 @@ MCP — единая agent-facing граница, даже для встроен
 - agent-generated HTML/forms/tables/charts;
 - controlled browser/DOM tools;
 - CSP и изоляция от privileged UI;
-- никаких произвольных HTML scripts в trusted context.
-
-### Возможные frontends
-
-- terminal sessions;
-- scheduled jobs;
-- Telegram/other gateways;
-- rich approval/diff surfaces.
-
----
+- никаких произвольных scripts в trusted context.
 
 ## Реальный порядок исполнения
 
 ```text
+0. build graph + contracts
 1. daemon + IPC
 2. applications + fuzzy search
 3. ranking/history
@@ -256,10 +286,11 @@ MCP — единая agent-facing граница, даже для встроен
 5. files + preview + clipboard
 6. terminal
 7. system controls + bottom bar
-8. MCP
-9. Cerebras agent + access policy
-10. memory
-11. dictation
-12. hardening
-13. voice/WebView later
+8. sync production
+9. MCP
+10. Cerebras agent + access policy
+11. memory
+12. dictation
+13. hardening
+14. voice/WebView later
 ```

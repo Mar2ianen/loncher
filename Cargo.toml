@@ -1,5 +1,12 @@
 [workspace]
-members = ["app", "crates/domain", "crates/runtime"]
+members = [
+    "app",
+    "crates/domain",
+    "crates/runtime",
+    "crates/ui-contract",
+    "crates/sync-protocol",
+    "crates/sync-engine",
+]
 resolver = "3"
 
 [workspace.package]
@@ -22,6 +29,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 loncher-domain = { path = "crates/domain" }
 loncher-runtime = { path = "crates/runtime" }
+loncher-sync-engine = { path = "crates/sync-engine" }
+loncher-sync-protocol = { path = "crates/sync-protocol" }
+loncher-ui-contract = { path = "crates/ui-contract" }
 
 [profile.release]
 codegen-units = 1

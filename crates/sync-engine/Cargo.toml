@@ -1,5 +1,5 @@
 [package]
-name = "loncher-runtime"
+name = "loncher-sync-engine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,9 +8,6 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-loncher-domain.workspace = true
-loncher-ui-contract.workspace = true
+loncher-sync-protocol.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-tokio-util.workspace = true
-tracing.workspace = true

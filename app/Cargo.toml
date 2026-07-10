@@ -7,11 +7,21 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = []
+gui = []
+sync = ["dep:loncher-sync-engine"]
+sync-client = ["sync"]
+sync-server = ["sync"]
+desktop = ["gui", "sync-client"]
+full = ["desktop"]
+
 [dependencies]
 clap.workspace = true
 dotenvy.workspace = true
 loncher-domain.workspace = true
 loncher-runtime.workspace = true
+loncher-sync-engine = { workspace = true, optional = true }
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true

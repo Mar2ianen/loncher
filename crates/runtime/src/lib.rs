@@ -1,46 +1,108 @@
 #![forbid(unsafe_code)]
 
-use loncher_domain::{CommandValidationError, DaemonCommand};
-use loncher_ui_contract::{UiBackend, UiCommand, UiError, UiSnapshot, UnavailableUiBackend};
+mod config;
+mod server;
+mod transport;
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+pub use config::{ConfigError, RuntimeConfig};
+pub use server::{run_daemon_with_ui, ServerError};
+
+use loncher_domain::{
+    DaemonCommand, DaemonReply, ProtocolErrorCode, ReplyPayload, RequestEnvelope, RequestId,
+};
+use loncher_ui_contract::UnavailableUiBackend;
 use thiserror::Error;
+use tokio::{net::UnixStream, time::timeout};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+pub async fn run_daemon(cancellation: CancellationToken) -> Result<(), RuntimeError> {
+    let config = RuntimeConfig::from_env()?;
+    run_daemon_with_config(config, cancellation).await
+}
+
+pub async fn run_daemon_with_config(
+    config: RuntimeConfig,
+    cancellation: CancellationToken,
+) -> Result<(), RuntimeError> {
+    run_daemon_with_ui(config, cancellation, UnavailableUiBackend).await?;
+    Ok(())
+}
+
+pub async fn dispatch_command(command: DaemonCommand) -> Result<DaemonReply, ClientError> {
+    let config = RuntimeConfig::from_env()?;
+    dispatch_command_with_config(&config, command).await
+}
+
+pub async fn dispatch_command_with_config(
+    config: &RuntimeConfig,
+    command: DaemonCommand,
+) -> Result<DaemonReply, ClientError> {
+    command
+        .validate()
+        .map_err(|error| ClientError::InvalidCommand(error.to_string()))?;
+
+    let request_id = RequestId::new(NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed));
+    let request = RequestEnvelope::new(request_id, command);
+
+    timeout(config.request_timeout, async {
+        let stream = UnixStream::connect(&config.socket_path)
+            .await
+            .map_err(ClientError::Connect)?;
+        let mut framed = transport::framed(stream, config.max_frame_size);
+        transport::send_json(&mut framed, &request).await?;
+        let reply = transport::receive_json::<loncher_domain::ReplyEnvelope>(&mut framed).await?;
+
+        if reply.request_id != request_id {
+            return Err(ClientError::RequestIdMismatch {
+                expected: request_id,
+                actual: reply.request_id,
+            });
+        }
+
+        match reply.payload {
+            ReplyPayload::Success { reply } => Ok(reply),
+            ReplyPayload::Error { error } => Err(ClientError::Remote {
+                code: error.code,
+                message: error.message,
+            }),
+        }
+    })
+    .await
+    .map_err(|_| ClientError::Timeout(config.request_timeout))?
+}
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
     #[error(transparent)]
-    InvalidCommand(#[from] CommandValidationError),
+    Config(#[from] ConfigError),
     #[error(transparent)]
-    Ui(#[from] UiError),
+    Server(#[from] ServerError),
 }
 
-pub async fn run_daemon(cancellation: CancellationToken) -> Result<(), RuntimeError> {
-    run_daemon_with_ui(cancellation, UnavailableUiBackend).await
-}
-
-pub async fn run_daemon_with_ui<U>(
-    cancellation: CancellationToken,
-    mut ui: U,
-) -> Result<(), RuntimeError>
-where
-    U: UiBackend,
-{
-    ui.dispatch(UiCommand::ApplySnapshot(UiSnapshot::default()))?;
-    info!("daemon runtime initialized");
-
-    cancellation.cancelled().await;
-
-    ui.dispatch(UiCommand::ApplySnapshot(UiSnapshot::default()))?;
-    ui.dispatch(UiCommand::Shutdown)?;
-    info!("daemon runtime cancellation observed");
-    Ok(())
-}
-
-pub async fn dispatch_command(command: DaemonCommand) -> Result<(), RuntimeError> {
-    command.validate()?;
-
-    // Phase 0 will replace this stub with a Unix-socket client. Keeping command validation
-    // here prevents the CLI contract from accepting invalid state before IPC exists.
-    debug!(?command, "command accepted by bootstrap runtime");
-    Ok(())
+#[derive(Debug, Error)]
+pub enum ClientError {
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+    #[error("invalid command: {0}")]
+    InvalidCommand(String),
+    #[error("failed to connect to daemon: {0}")]
+    Connect(std::io::Error),
+    #[error(transparent)]
+    Transport(#[from] transport::TransportError),
+    #[error("daemon request timed out after {0:?}")]
+    Timeout(std::time::Duration),
+    #[error("daemon reply request ID mismatch: expected {expected:?}, got {actual:?}")]
+    RequestIdMismatch {
+        expected: RequestId,
+        actual: RequestId,
+    },
+    #[error("daemon rejected request ({code:?}): {message}")]
+    Remote {
+        code: ProtocolErrorCode,
+        message: String,
+    },
 }

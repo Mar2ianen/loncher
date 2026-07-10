@@ -4,116 +4,169 @@
 
 ## 1. Цель проекта
 
-`loncher` — один Linux/Niri-first binary, работающий как долгоживущий пользовательский daemon. UI является временной layer-shell surface и не владеет долговременным состоянием.
+`loncher` — один Linux/Niri-first binary, работающий как долгоживущий пользовательский daemon. GUI является опциональной временной layer-shell surface и не владеет долговременным состоянием.
 
-Приоритет разработки:
+Приоритет:
 
 1. daemon и IPC;
 2. быстрый launcher;
 3. Niri/search/files/preview;
 4. system controls и terminal;
-5. MCP;
-6. AI-agent, память и диктовка.
+5. sync production;
+6. MCP;
+7. AI-agent, память и диктовка.
 
 Не протаскивать AI в критический путь launcher-а без прямого запроса.
 
 ## 2. Архитектурные инварианты
 
-- Один release binary; Cargo workspace допустим и желателен для границ зависимостей.
-- Services владеют состоянием и capabilities.
+- Один release binary; Cargo workspace используется для границ зависимостей.
+- Daemon владеет durable/runtime state.
+- Services владеют capabilities.
+- GUI — optional frontend adapter.
+- Core обязан собираться без GUI dependencies.
 - UI вызывает services через typed Rust API.
 - Agent получает те же capabilities через MCP adapters.
-- UI не пишет напрямую в SQLite, D-Bus, Niri IPC или provider API.
-- Не создавать глобальный `Arc<RwLock<AppState>>` как универсальную шину.
-- Для команд использовать bounded `mpsc`; для snapshots — `watch`; для потоковых событий — bounded `mpsc`/`broadcast` только при обосновании.
-- Все долгоживущие задачи должны поддерживать cancellation и корректное завершение.
+- Sync — отдельный service со своим operation protocol; MCP не является sync transport.
+- UI не пишет напрямую в SQLite, D-Bus, Niri IPC, sync transport или provider API.
+- Не создавать глобальный `Arc<RwLock<AppState>>`.
+- Commands: bounded `mpsc`; snapshots: `watch`; streams: bounded channels с обоснованием.
+- Все долгоживущие задачи поддерживают cancellation и join.
 - Blocking I/O выполняется вне async worker threads.
 
-## 3. Rust style
+## 3. GUI boundary
+
+- `ui-contract` не зависит от Iced, Wayland или layer-shell.
+- Renderer/framework types не выходят из будущего `ui-iced` crate.
+- Не создавать абстракцию над widgets (`Button`, `Row`, `RenderTree`). Абстрагировать commands, snapshots и events.
+- Headless backend не врёт об успехе: видимые UI actions возвращают typed `UnavailableInBuild`.
+- Iced frontend должен быть leaf crate.
+- UI state, который нужен после закрытия surface, принадлежит daemon/service, не widget tree.
+
+## 4. Features и build profiles
+
+Cargo features аддитивны.
+
+- отсутствие `gui` означает headless;
+- отрицательный feature `headless` запрещён;
+- runtime roles не кодируются mutually-exclusive features;
+- optional dependency должна быть реально optional и не протекать в core;
+- новый feature добавляется в CI matrix;
+- `--all-features` и `--no-default-features` обязаны собираться.
+
+Текущие profiles:
+
+```text
+core:          --no-default-features
+sync client:   --no-default-features --features sync-client
+sync server:   --no-default-features --features sync-server
+desktop:       --no-default-features --features desktop
+full:          --all-features
+```
+
+## 5. Rust style
 
 - Rust 2024, MSRV указан в workspace.
-- `#![forbid(unsafe_code)]` по умолчанию. Исключения возможны только в отдельном adapter crate с документированным инвариантом безопасности.
+- `#![forbid(unsafe_code)]` по умолчанию.
+- Исключения unsafe возможны только в отдельном adapter crate с документированным safety invariant.
 - Не использовать `panic!`, `unwrap()` и `expect()` в production-коде.
-- Ошибки внутри crates — типизированные через `thiserror`.
-- Dynamic error допустим только на границе executable, если сохраняется source chain.
-- Не терять ошибки через `.ok()` без комментария, почему ошибка намеренно игнорируется.
-- Типы домена не должны зависеть от UI, D-Bus, MCP или конкретного provider-а.
+- В tests `expect()` допустим для fixture setup.
+- Ошибки внутри crates типизированы через `thiserror`.
+- Dynamic error допустим на executable boundary с сохранением source chain.
+- Не терять ошибки через `.ok()` или `let _ =` без объяснения.
+- Domain types не зависят от UI, D-Bus, MCP, sync transport или provider.
 - Newtype для идентификаторов и значений с инвариантами.
-- Public API минимален; не делать поля `pub` только ради удобства тестов.
-- Комментарии объясняют причину и ограничения, а не пересказывают код.
-- Имена кода, commits и API — на английском. Пользовательская документация может быть на русском.
+- Public API минимален.
+- Комментарии объясняют причину и ограничения.
+- Code, commits и API — на английском; user docs могут быть на русском.
 
-## 4. Async и daemon
+## 6. Async и daemon
 
-- Каждая задача имеет владельца и понятный lifecycle.
-- Никаких detached tasks без регистрации и shutdown policy.
+- Каждая задача имеет владельца и lifecycle.
+- Detached tasks запрещены.
 - Внешние операции получают timeout.
-- Очереди bounded; поведение при переполнении определено явно.
-- Повторные подключения используют backoff с jitter.
+- Очереди bounded; overflow policy явная.
+- Reconnect использует backoff с jitter.
 - Unix socket доступен только текущему пользователю.
-- Stale socket удаляется только после проверки, что daemon действительно отсутствует.
+- Stale socket удаляется лишь после проверки отсутствия daemon.
 
-## 5. Security и privacy
+## 7. Sync
 
-- Никогда не коммитить `.env`, ключи, токены, cookies и локальные базы.
-- Не логировать secrets, полный clipboard, диктовку и сырые agent prompts по умолчанию.
-- Tool/MCP calls проходят policy engine до выполнения.
-- `Full access` не означает произвольный shell без capability limits.
-- Filesystem tools обязаны проверять scopes, canonical paths, symlinks и размер output.
-- Любой внешний текст считается недоверенным и не может автоматически становиться долговременной памятью.
+- Не синхронизировать SQLite-файл целиком.
+- Operations versioned и идемпотентны.
+- Device sequence монотонен; cursor per device.
+- Payload opaque и позже шифруется application-level.
+- Merge policy выбирается по entity type.
+- Secrets, private keys, raw mic audio и machine-local state не синхронизируются.
+- Remote actions — отдельное capability и default deny.
+- Persistent transport/storage не добавлять раньше рабочего launcher MVP, кроме необходимого contract skeleton.
+- Любое изменение wire types требует schema/version review и compatibility tests.
 
-## 6. Agent и MCP
+## 8. Security и privacy
+
+- Никогда не коммитить `.env`, keys, tokens, cookies и local DB.
+- Не логировать secrets, полный clipboard, диктовку и raw agent prompts по умолчанию.
+- Tool/MCP calls проходят policy engine.
+- `Full access` не означает arbitrary shell без capability limits.
+- Filesystem tools проверяют scopes, canonical paths, symlinks и output size.
+- Внешний текст недоверен и не становится памятью автоматически.
+- Sync hub не должен требовать plaintext пользовательских данных.
+
+## 9. Agent и MCP
 
 - MCP — единая agent-facing граница capabilities.
-- Встроенные MCP tools являются adapters над теми же Rust services, что использует UI.
-- Не дублировать бизнес-логику внутри MCP handlers.
-- Не загружать все tool schemas в контекст: использовать progressive discovery.
-- Память разделяется на working, episodic, semantic и procedural.
-- Facts хранят provenance, scope, confidence и при необходимости TTL.
-- FTS5-first; embeddings добавляются только после измеренного miss-rate.
-- Модель не записывает устойчивые пользовательские факты без policy/approval.
+- Builtin tools — adapters над теми же Rust services, что использует UI.
+- Не дублировать бизнес-логику в MCP handlers.
+- Использовать progressive discovery.
+- Память: working, episodic, semantic, procedural.
+- Facts хранят provenance, scope, confidence и TTL при необходимости.
+- FTS5-first; embeddings только после измеренного miss-rate.
+- Модель не записывает устойчивые user facts без policy/approval.
 
-## 7. UI/UX constraints
+## 10. UI/UX constraints
 
 - Минимализм: текст только для имён и данных; состояние — цветом; действие — иконкой/формой.
-- Внутри окна: компактный status bar, затем search/input.
+- Внутри окна: compact status bar, затем search/input.
 - Status bar: Niri workspaces, страна/IP, latency, CPU/GPU/VRAM/RAM/network/battery/time без дублирования control center.
-- Правая зона обычного режима: компактный cluster 2×2 для Wi-Fi, Bluetooth, display/brightness и sound; клик открывает детали.
+- Правая зона: compact 2×2 Wi-Fi/Bluetooth/display/sound; клик открывает details.
 - Apps — grid; остальные результаты — плотные две колонки.
 - Preview заменяет generic icon для media/files.
-- `Tab` — autocomplete; `Space` — wide preview; `!` — terminal; `@` — agent; web search — отдельное действие.
-- Нижняя строка обычного режима: MPRIS player + calendar/weather + dictation.
-- После первого agent prompt нижняя строка становится composer; история диалогов открывается browser-like drawer и по умолчанию скрыта.
-- Tool palette компактна, состояния обозначены цветом; документация и permissions доступны через context menu.
+- `Tab` — autocomplete; `Space` — wide preview; `!` — terminal; `@` — agent.
+- Нижняя строка: MPRIS + calendar/weather + dictation.
+- После первого agent prompt нижняя строка становится composer.
+- History — browser-like drawer и по умолчанию скрыта.
+- Tool palette compact; state цветом; docs/permissions по context menu.
 
-## 8. Dependencies
+## 11. Dependencies
 
 Перед добавлением crate:
 
-1. проверить существование, актуальность, лицензию и maintenance;
-2. проверить, нельзя ли использовать уже принятую зависимость;
-3. изолировать нестабильный API собственным adapter trait;
-4. зафиксировать точную версию crates, которые следуют версиям внешнего проекта и не соблюдают обычный semver, например Niri IPC;
-5. не включать широкие feature sets без необходимости.
+1. проверить актуальность, лицензию и maintenance;
+2. проверить переиспользование принятой зависимости;
+3. изолировать нестабильный API adapter trait;
+4. pin version для проектов без обычного semver, например Niri IPC;
+5. не включать широкие features без необходимости.
 
-## 9. Tests и quality gate
+## 12. Tests и quality gate
 
-Перед завершением изменения выполнить:
+Перед завершением изменения:
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
+cargo check -p loncher --no-default-features
 ```
 
-Новые parser/state/policy изменения требуют unit tests. IPC, MCP и storage contracts требуют integration tests. Исправление бага должно содержать regression test, если это практически возможно.
+Новые parser/state/policy/sync изменения требуют unit tests. IPC, MCP, storage и sync contracts требуют integration tests. Bugfix содержит regression test, когда практически возможно.
 
-## 10. Рабочий процесс агента
+## 13. Рабочий процесс агента
 
 - Сначала прочитать `docs/ROADMAP.md` и план активной фазы.
-- Делать небольшой вертикальный срез, а не создавать абстракции на много фаз вперёд.
-- Не отмечать checkbox выполненным, пока acceptance criterion не подтверждён тестом или воспроизводимой проверкой.
-- При изменении архитектурного решения обновить соответствующий документ в том же commit.
-- Не менять публичные contracts скрытно.
+- Для sync прочитать `docs/SYNC.md`.
+- Делать небольшой вертикальный срез.
+- Не отмечать checkbox выполненным без теста или воспроизводимой проверки.
+- Архитектурное решение и docs меняются в одном commit.
+- Не менять public contracts скрытно.
 - Не добавлять generated files, cache, local state и secrets.
 - Commit message: Conventional Commits, кратко и по факту.

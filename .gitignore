@@ -1,0 +1,38 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Runtime state
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.sock
+*.pid
+/data/
+/cache/
+/logs/
+
+# Coverage and profiling
+/coverage/
+*.profraw
+*.profdata
+flamegraph.svg
+perf.data*
+
+# Editors
+.idea/
+.vscode/
+.zed/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

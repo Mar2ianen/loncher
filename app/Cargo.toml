@@ -1,0 +1,17 @@
+[package]
+name = "loncher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+clap.workspace = true
+dotenvy.workspace = true
+loncher-domain.workspace = true
+loncher-runtime.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

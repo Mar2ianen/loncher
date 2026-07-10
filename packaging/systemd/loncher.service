@@ -1,14 +1,16 @@
 [Unit]
-Description=loncher desktop control plane
+Description=loncher desktop control plane daemon
 Documentation=https://github.com/Mar2ianen/loncher
+After=graphical-session.target
+PartOf=graphical-session.target
 
 [Service]
 Type=simple
 ExecStart=%h/.local/bin/loncher daemon
 EnvironmentFile=-%h/.config/loncher/environment
 Restart=on-failure
-RestartSec=2s
-TimeoutStopSec=10s
+RestartSec=1s
+TimeoutStopSec=5s
 
 [Install]
 WantedBy=default.target
